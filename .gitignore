@@ -1,2 +1,3 @@
 .vscode
 .gitattributes
+__pycache__
