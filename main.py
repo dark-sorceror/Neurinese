@@ -1,8 +1,26 @@
+import torch
+import numpy as np
 import tkinter as tk
-from tkinter import Canvas, Button
+from pathlib import Path
 from PIL import Image, ImageDraw
+from tkinter import Canvas, Button
+
+from model import CharacterRecognizer
+from preprocess import preprocess_pil_image
 
 CANVAS_SIZE = 300
+CHARACTER_TO_COLLECT = "你"
+INDEX_OF_CHARACTER = 1
+MODEL_SIZE = 64
+
+INDEX_TO_CHAR = {
+    0: "不",
+    1: "你"
+}
+
+IMAGE_FILE_PATH = Path("./data/image.npy")
+LABEL_FILE_PATH = Path("./data/label.npy")
+MODEL_PATH = Path("./CNN_char_model.pth")
 
 class DrawingApp:
     def __init__(self, master):
@@ -36,6 +54,28 @@ class DrawingApp:
             command = self.clear_canvas
         )
         self.clear_btn.pack(side = tk.LEFT, padx = 5)
+        
+        self.save_btn = Button(
+            master, 
+            text = "Save", 
+            command = self.save
+        )
+        self.save_btn.pack(side = tk.LEFT, padx = 5)
+        
+        self.recognize_btn = Button(
+            master, 
+            text = "Recognize", 
+            command = self.recognize_char
+        )
+        self.recognize_btn.pack(side = tk.LEFT, padx = 5)
+        
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        
+        if MODEL_PATH.exists():
+            self.model = CharacterRecognizer(num_classes = 2)
+            self.model.load_state_dict(torch.load(MODEL_PATH, map_location=self.device))
+            self.model.to(self.device)
+            self.model.eval()
 
     def start_draw(self, event):
         self.lastX, self.lastY = event.x, event.y
@@ -72,6 +112,67 @@ class DrawingApp:
             color = 0
         )
         self.draw = ImageDraw.Draw(self.image)
+        
+    def preprocess_image(self):
+        return preprocess_pil_image(self.image)
+        
+    def save(self):
+        processed_input = self.preprocess_image()
+        
+        if processed_input is None:
+            return
+
+        label = np.array(
+            [INDEX_OF_CHARACTER], 
+            dtype = np.int64
+        )
+        
+        if not IMAGE_FILE_PATH.exists() and not LABEL_FILE_PATH.exists():
+            np.save(IMAGE_FILE_PATH, np.expand_dims(processed_input, axis = 0))
+            np.save(LABEL_FILE_PATH, label)
+        
+            print(f"1 total sample")
+            
+            self.clear_canvas()
+            
+            return
+        
+        for i in range(10):
+            images = np.load(IMAGE_FILE_PATH)
+            labels = np.load(LABEL_FILE_PATH)
+            
+            image_batch = np.expand_dims(processed_input, axis = 0) 
+            
+            updated_images = np.concatenate([images, image_batch], axis = 0)
+            updated_labels = np.concatenate([labels, label], axis = 0)
+
+            np.save(IMAGE_FILE_PATH, updated_images)
+            np.save(LABEL_FILE_PATH, updated_labels)
+        
+        print(f"{len(images)} total samples")
+        
+        self.clear_canvas()
+        
+    def recognize_char(self):
+        if not self.model:
+            return
+        
+        input_data = self.preprocess_image()
+
+        input_tensor = torch.from_numpy(input_data).unsqueeze(0).to(self.device)
+        input_tensor = input_tensor.to(self.device)
+        
+        with torch.no_grad():
+            outputs = self.model(input_tensor)
+        
+        probs = torch.softmax(outputs, dim = 1).squeeze().cpu().numpy()
+        predicted_index = np.argmax(probs)
+
+        
+        confidence = probs[predicted_index]
+        predicted_char = INDEX_TO_CHAR.get(predicted_index, "???")
+        
+        print(f"Prediction: {predicted_char} Confidence: {confidence:.2f}")
 
 if __name__ == "__main__":
     root = tk.Tk()
