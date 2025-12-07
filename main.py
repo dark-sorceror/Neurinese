@@ -9,13 +9,18 @@ from model import CharacterRecognizer
 from preprocess import preprocess_pil_image
 
 CANVAS_SIZE = 300
-CHARACTER_TO_COLLECT = "你"
-INDEX_OF_CHARACTER = 1
+CHARACTER_TO_COLLECT = "Unknown"
+INDEX_OF_CHARACTER = 0
 MODEL_SIZE = 64
 
+CONFIDENCE_THRESHOLD = 0.70
+MARGIN_THRESHOLD = 0.35
+
 INDEX_TO_CHAR = {
-    0: "不",
-    1: "你"
+    0: "Unknown",
+    1: "你",
+    2: "不",
+    3: "大"
 }
 
 IMAGE_FILE_PATH = Path("./data/image.npy")
@@ -36,7 +41,7 @@ class DrawingApp:
             height = CANVAS_SIZE, 
             bg = "black"
         )
-        self.canvas.pack(pady=10)
+        self.canvas.pack(pady = 10)
         
         self.image = Image.new(
             mode = "L", 
@@ -72,7 +77,7 @@ class DrawingApp:
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         
         if MODEL_PATH.exists():
-            self.model = CharacterRecognizer(num_classes = 2)
+            self.model = CharacterRecognizer(num_classes = len(INDEX_TO_CHAR))
             self.model.load_state_dict(torch.load(MODEL_PATH, map_location=self.device))
             self.model.to(self.device)
             self.model.eval()
@@ -137,7 +142,7 @@ class DrawingApp:
             
             return
         
-        for i in range(10):
+        for i in range(20):
             images = np.load(IMAGE_FILE_PATH)
             labels = np.load(LABEL_FILE_PATH)
             
@@ -166,13 +171,21 @@ class DrawingApp:
             outputs = self.model(input_tensor)
         
         probs = torch.softmax(outputs, dim = 1).squeeze().cpu().numpy()
-        predicted_index = np.argmax(probs)
+        
+        top_idx = probs.argmax()
+        top_prob = probs[top_idx]
 
+        sorted_probs = np.sort(probs)
+        margin = sorted_probs[-1] - sorted_probs[-2]
         
-        confidence = probs[predicted_index]
-        predicted_char = INDEX_TO_CHAR.get(predicted_index, "???")
+        if top_idx == 0 or top_prob < CONFIDENCE_THRESHOLD or margin < MARGIN_THRESHOLD:
+            print(F"Prediction: Unknown Confidence: {top_prob:.2f} Margin: {margin:.2f}")
+            
+            return
+
+        predicted_char = INDEX_TO_CHAR[top_idx]
         
-        print(f"Prediction: {predicted_char} Confidence: {confidence:.2f}")
+        print(f"Prediction: {predicted_char} Confidence: {top_prob:.2f} Margin: {margin:.2f}")
 
 if __name__ == "__main__":
     root = tk.Tk()

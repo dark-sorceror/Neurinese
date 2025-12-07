@@ -7,7 +7,7 @@ from trainer import Trainer
 from model import CharacterRecognizer, CharacterDataset
 
 IMAGE_SIZE = 64
-NUM_CLASSES = 2
+NUM_CLASSES = 4
 
 DATA_ROOT = Path("./data")
 MODEL_SAVE_PATH = Path("./CNN_char_model.pth")
@@ -46,23 +46,38 @@ if __name__ == "__main__":
     val_ds = CharacterDataset(x_val, y_val)
     test_ds = CharacterDataset(x_test, y_test) 
 
-    train_loader = DataLoader(train_ds, batch_size=64, shuffle=True, num_workers=4)
-    val_loader = DataLoader(val_ds, batch_size=64, num_workers=4)
-    test_loader = DataLoader(test_ds, batch_size=64, num_workers=4)
+    train_loader = DataLoader(
+        train_ds, 
+        batch_size = 64, 
+        shuffle = True, 
+        num_workers = 4
+    )
+    val_loader = DataLoader(
+        val_ds, 
+        batch_size = 64, 
+        num_workers = 4
+    )
+    test_loader = DataLoader(
+        test_ds, 
+        batch_size = 64, 
+        num_workers = 4
+    )
 
     model = CharacterRecognizer(num_classes = NUM_CLASSES)
 
     trainer = Trainer(model) 
 
     x, y = next(iter(train_loader))
+    
+    # For easy debugging
     print(x.shape)
     print(x.min(), x.max()) 
     
     trainer.fit(
-        train_loader=train_loader,
-        val_loader=val_loader,
-        epochs=50,
-        checkpoint_path=MODEL_SAVE_PATH
+        train_loader = train_loader,
+        val_loader = val_loader,
+        epochs = 50,
+        checkpoint_path = MODEL_SAVE_PATH
     )
 
     print("Training complete.")

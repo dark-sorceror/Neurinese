@@ -3,12 +3,13 @@ import torch.nn as nn
 import torch.optim as optim
 
 class Trainer:
-    def __init__(self, 
-                 model: nn.Module, 
-                 lr = 0.01, 
-                 scheduler = None, 
-                 device = None
-                ):
+    def __init__(
+        self, 
+        model: nn.Module, 
+        lr = 0.01, 
+        scheduler = None, 
+        device = None
+    ):
         self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
         self.model = model.to(self.device)
         self.criterion = nn.CrossEntropyLoss(label_smoothing = 0.1)
