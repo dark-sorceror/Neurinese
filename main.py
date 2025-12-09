@@ -9,18 +9,15 @@ from model import CharacterRecognizer
 from preprocess import preprocess_pil_image
 
 CANVAS_SIZE = 300
-CHARACTER_TO_COLLECT = "Unknown"
-INDEX_OF_CHARACTER = 0
 MODEL_SIZE = 64
 
 CONFIDENCE_THRESHOLD = 0.70
 MARGIN_THRESHOLD = 0.35
 
 INDEX_TO_CHAR = {
-    0: "Unknown",
-    1: "你",
-    2: "不",
-    3: "大"
+    0: "你",
+    1: "不",
+    2: "大"
 }
 
 IMAGE_FILE_PATH = Path("./data/image.npy")
@@ -73,6 +70,14 @@ class DrawingApp:
             command = self.recognize_char
         )
         self.recognize_btn.pack(side = tk.LEFT, padx = 5)
+        
+        self.CHARACTER_TO_COLLECT = "你"
+        self.INDEX_OF_CHARACTER = 0
+        self.INDEX_TO_CHAR = {
+            0: "你",
+            1: "不",
+            2: "大"
+        }
         
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         
@@ -128,7 +133,7 @@ class DrawingApp:
             return
 
         label = np.array(
-            [INDEX_OF_CHARACTER], 
+            [self.INDEX_OF_CHARACTER], 
             dtype = np.int64
         )
         
@@ -136,13 +141,7 @@ class DrawingApp:
             np.save(IMAGE_FILE_PATH, np.expand_dims(processed_input, axis = 0))
             np.save(LABEL_FILE_PATH, label)
         
-            print(f"1 total sample")
-            
-            self.clear_canvas()
-            
-            return
-        
-        for i in range(20):
+        for i in range(50):
             images = np.load(IMAGE_FILE_PATH)
             labels = np.load(LABEL_FILE_PATH)
             
@@ -155,6 +154,15 @@ class DrawingApp:
             np.save(LABEL_FILE_PATH, updated_labels)
         
         print(f"{len(images)} total samples")
+
+        if self.INDEX_OF_CHARACTER == len(self.INDEX_TO_CHAR) - 1:
+            self.INDEX_OF_CHARACTER = 0
+        else:
+            self.INDEX_OF_CHARACTER += 1
+        
+        self.CHARACTER_TO_COLLECT = self.INDEX_TO_CHAR.get(self.INDEX_OF_CHARACTER)
+        
+        print(self.CHARACTER_TO_COLLECT)
         
         self.clear_canvas()
         
@@ -178,16 +186,18 @@ class DrawingApp:
         sorted_probs = np.sort(probs)
         margin = sorted_probs[-1] - sorted_probs[-2]
         
-        if top_idx == 0 or top_prob < CONFIDENCE_THRESHOLD or margin < MARGIN_THRESHOLD:
-            print(F"Prediction: Unknown Confidence: {top_prob:.2f} Margin: {margin:.2f}")
+        if top_prob < CONFIDENCE_THRESHOLD or margin < MARGIN_THRESHOLD:
+            print(F"Prediction: Unknown\tConfidence: {top_prob:.2f}\tMargin: {margin:.2f}")
             
             return
 
-        predicted_char = INDEX_TO_CHAR[top_idx]
+        predicted_char = self.INDEX_TO_CHAR[top_idx]
         
-        print(f"Prediction: {predicted_char} Confidence: {top_prob:.2f} Margin: {margin:.2f}")
+        print(f"Prediction: {predicted_char}\tConfidence: {top_prob:.2f}\tMargin: {margin:.2f}")
 
 if __name__ == "__main__":
+    print("你")
+    
     root = tk.Tk()
     app = DrawingApp(root)
     root.mainloop()

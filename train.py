@@ -7,7 +7,7 @@ from trainer import Trainer
 from model import CharacterRecognizer, CharacterDataset
 
 IMAGE_SIZE = 64
-NUM_CLASSES = 4
+NUM_CLASSES = 3
 
 DATA_ROOT = Path("./data")
 MODEL_SAVE_PATH = Path("./CNN_char_model.pth")
