@@ -47,8 +47,9 @@ class DrawingApp:
         )
         self.draw = ImageDraw.Draw(self.image)
         
-        self.canvas.bind("<Button-1>", self.start_draw)
+        self.canvas.bind("<Button-1>", self.start_stroke)
         self.canvas.bind("<B1-Motion>", self.draw_line)
+        self.canvas.bind("<ButtonRelease-1>", self.end_stroke)
         
         self.clear_btn = Button(
             master, 
@@ -79,6 +80,9 @@ class DrawingApp:
             2: "大"
         }
         
+        self.strokes = []
+        self.current_stroke = []
+        
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         
         if MODEL_PATH.exists():
@@ -87,10 +91,30 @@ class DrawingApp:
             self.model.to(self.device)
             self.model.eval()
 
-    def start_draw(self, event):
+    def start_stroke(self, event):
         self.lastX, self.lastY = event.x, event.y
+        
+        self.canvas.create_oval(
+            event.x - 3.75, 
+            event.y - 3.75, 
+            event.x + 3.75, 
+            event.y + 3.75,
+            fill = "white", 
+            outline = "white" 
+        )
+
+        self.current_stroke.append((event.x, event.y))
+        
+    def end_stroke(self, event):
+        if self.current_stroke:
+            self.strokes.append(self.current_stroke[:])
+        
+        self.current_stroke.clear()
+        
+        print(self.strokes)
 
     def draw_line(self, event):
+        self.current_stroke.append((event.x, event.y))
         if self.lastX and self.lastY:
             self.canvas.create_line(
                 self.lastX, 
