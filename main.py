@@ -5,8 +5,8 @@ from pathlib import Path
 from PIL import Image, ImageDraw
 from tkinter import Canvas, Button
 
-from model import CharacterRecognizer
-from preprocess import preprocess_pil_image
+from character_model import CharacterRecognizer
+from preprocess import preprocess_pil_image, preprocess_strokes
 
 CANVAS_SIZE = 300
 MODEL_SIZE = 64
@@ -110,8 +110,6 @@ class DrawingApp:
             self.strokes.append(self.current_stroke[:])
         
         self.current_stroke.clear()
-        
-        print(self.strokes)
 
     def draw_line(self, event):
         self.current_stroke.append((event.x, event.y))
@@ -178,6 +176,9 @@ class DrawingApp:
             np.save(LABEL_FILE_PATH, updated_labels)
         
         print(f"{len(images)} total samples")
+        
+        strokes = preprocess_strokes(self.strokes)
+        print(strokes)
 
         if self.INDEX_OF_CHARACTER == len(self.INDEX_TO_CHAR) - 1:
             self.INDEX_OF_CHARACTER = 0
