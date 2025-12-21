@@ -239,6 +239,8 @@ class DrawingApp:
         self.lastY = 0
         
         strokes = preprocess_strokes(self.strokes).tolist()
+        
+        print(strokes)
 
         # Center of mass lol
         abs_coors = []
