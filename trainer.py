@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 
-class Trainer:
+class CharacterRecognizingTrainer:
     def __init__(
         self, 
         model: nn.Module, 
@@ -95,3 +95,45 @@ class Trainer:
                 self.scheduler.step(val_loss)
                 
         print(f"Training finished. Best Validation Loss: {best_val_loss:.4f}")
+
+class HandwritingTrainer:
+    def __init__(self, model, learning_rate = 0.0001):
+        self.model = model
+        self.optimizer = optim.Adam(model.parameters(), lr=learning_rate)
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.model.to(self.device)
+
+    def vae_loss_function(self, mdn_params, target_strokes, mean_dist, log_var):
+        target_coords = target_strokes[:, :, :2]
+        target_flags = target_strokes[:, :, 2:]
+
+        pred_coords = mdn_params[:, :, :2]
+        pred_flags = mdn_params[:, :, 2:]
+        
+        recon_loss_coords = torch.nn.functional.mse_loss(pred_coords, target_coords)
+        recon_loss_flags = torch.nn.functional.binary_cross_entropy_with_logits(pred_flags, target_flags)
+        
+        drawing_loss = recon_loss_coords + recon_loss_flags
+
+        # KL Divergence
+        kl_loss = -0.5 * torch.sum(1 + log_var - mean_dist.pow(2) - log_var.exp())
+        
+        return drawing_loss + (0.01 * kl_loss)
+
+    def train_step(self, batch_strokes, batch_char_ids):
+        self.model.train()
+        self.optimizer.zero_grad()
+        
+        batch_strokes = batch_strokes.to(self.device)
+        batch_char_ids = batch_char_ids.to(self.device)
+
+        mdn_params, mean_dist, log_var = self.model(batch_strokes, batch_char_ids)
+        
+        target = batch_strokes[:, 1:, :] 
+        
+        loss = self.vae_loss_function(mdn_params, target, mean_dist, log_var)
+        
+        loss.backward()
+        self.optimizer.step()
+        
+        return loss.item()
