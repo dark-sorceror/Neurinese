@@ -24,16 +24,21 @@ def preprocess_pil_image(pil_img):
     
     return np.expand_dims(img, axis = 0)
 
-def to_relative_strokes(strokes: list[list[int]]):
-    sequence = []
+def to_relative(seq):
+    out = []
     
-    prev_x, prev_y = 0.0, 0.0
+    for i in range(1, len(seq)):
+        x0, y0, p0 = seq[i - 1]
+        x1, y1, p1 = seq[i]
+        dx, dy = (x1 - x0) * 100, (y1 - y0) * 100
+        
+        out.append([dx, dy, p1])
+        
+    return np.array(out, dtype = np.float32)
 
-    for x, y, p in strokes:
-        dx, dy = x - prev_x, y - prev_y
-        sequence.append([dx, dy, p])
-        prev_x, prev_y = x, y
-
-    dataset = np.array(sequence, dtype = np.float32)
-
-    return dataset
+def normalize(seq):
+    seq[:, :2] -= seq[:, :2].mean(axis = 0, keepdims = True)
+    scale = seq[:, :2].std() + 1e-6
+    seq[:, :2] /= scale
+    
+    return seq
