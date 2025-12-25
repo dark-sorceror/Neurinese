@@ -24,25 +24,16 @@ def preprocess_pil_image(pil_img):
     
     return np.expand_dims(img, axis = 0)
 
-def preprocess_strokes(strokes):
+def to_relative_strokes(strokes: list[list[int]]):
     sequence = []
     
     prev_x, prev_y = 0.0, 0.0
-    
-    for i, stroke in enumerate(strokes):
-        for j, (x, y) in enumerate(stroke):
-            dx = x - prev_x
-            dy = y - prev_y
-            
-            pen_down = 1 if j > 0 else 0 
-            pen_up = 1 if j == 0 and i > 0 else 0 
-            
-            if i == 0 and j == 0:
-                pen_down, pen_up = 0, 0
-            
-            sequence.append([dx, dy, pen_down, pen_up])
-            prev_x, prev_y = x, y
 
-    dataset = np.array(sequence, dtype=np.float32)
+    for x, y, p in strokes:
+        dx, dy = x - prev_x, y - prev_y
+        sequence.append([dx, dy, p])
+        prev_x, prev_y = x, y
+
+    dataset = np.array(sequence, dtype = np.float32)
 
     return dataset

@@ -1,4 +1,3 @@
-import time
 import torch
 import numpy as np
 import tkinter as tk
@@ -7,7 +6,7 @@ from PIL import Image, ImageDraw
 from tkinter import Canvas, Button
 
 from character_model import CharacterRecognizer
-from preprocess import preprocess_pil_image, preprocess_strokes
+from preprocess import preprocess_pil_image, to_relative_strokes
 
 CANVAS_SIZE = 300
 MODEL_SIZE = 64
@@ -23,6 +22,7 @@ INDEX_TO_CHAR = {
 
 IMAGE_FILE_PATH = Path("./data/image.npy")
 LABEL_FILE_PATH = Path("./data/label.npy")
+STROKE_FILE_PATH = Path("./data/strokes.npy")
 MODEL_PATH = Path("./CNN_char_model.pth")
 
 class DrawingApp:
@@ -73,12 +73,12 @@ class DrawingApp:
         )
         self.recognize_btn.pack(side = tk.LEFT, padx = 5)
         
-        self.test_btn = Button(
+        self.draw_btn = Button(
             master, 
             text = "Draw", 
-            command = self.test
+            command = self.draw_char
         )
-        self.test_btn.pack(side = tk.LEFT, padx = 5)
+        self.draw_btn.pack(side = tk.LEFT, padx = 5)
         
         self.CHARACTER_TO_COLLECT = "你"
         self.INDEX_OF_CHARACTER = 0
@@ -158,49 +158,61 @@ class DrawingApp:
         
     def preprocess_image(self):
         return preprocess_pil_image(self.image)
+    
+    def preprocess_strokes(self):
+        seq = []
+        
+        for stroke in self.strokes:
+            for i, (x, y) in enumerate(stroke):
+                if i == 0:
+                    p = 1
+                else:
+                    p = 0
+                
+                seq.append([x, y, p])
+                
+        return np.array(seq, dtype = np.float32)
         
     def save(self):
         processed_input = self.preprocess_image()
         
-        if processed_input is None:
-            return
+        if processed_input is None: return
 
-        label = np.array(
-            [self.INDEX_OF_CHARACTER], 
-            dtype = np.int64
-        )
+        label = np.array([self.INDEX_OF_CHARACTER], dtype=np.int64)
         
-        if not IMAGE_FILE_PATH.exists() and not LABEL_FILE_PATH.exists():
-            np.save(IMAGE_FILE_PATH, np.expand_dims(processed_input, axis = 0))
+        if not IMAGE_FILE_PATH.exists():
+            np.save(IMAGE_FILE_PATH, np.expand_dims(processed_input, axis=0))
             np.save(LABEL_FILE_PATH, label)
-        
-        for i in range(50):
+        else:
             images = np.load(IMAGE_FILE_PATH)
             labels = np.load(LABEL_FILE_PATH)
-            
-            image_batch = np.expand_dims(processed_input, axis = 0) 
-            
-            updated_images = np.concatenate([images, image_batch], axis = 0)
-            updated_labels = np.concatenate([labels, label], axis = 0)
-
+            updated_images = np.concatenate([images, np.expand_dims(processed_input, axis=0)], axis=0)
+            updated_labels = np.concatenate([labels, label], axis=0)
             np.save(IMAGE_FILE_PATH, updated_images)
             np.save(LABEL_FILE_PATH, updated_labels)
-        
-        print(f"{len(images)} total samples")
-        
-        strokes = preprocess_strokes(self.strokes)
-        
-        #print(strokes)
 
-        if self.INDEX_OF_CHARACTER == len(self.INDEX_TO_CHAR) - 1:
-            self.INDEX_OF_CHARACTER = 0
-        else:
-            self.INDEX_OF_CHARACTER += 1
+        seq = self.preprocess_strokes()
+        
+        if len(seq) > 0:
+            if not STROKE_FILE_PATH.exists():
+                data_list = [seq]
+            else:
+                current_strokes_array = np.load(STROKE_FILE_PATH, allow_pickle=True)
+                data_list = list(current_strokes_array)
+                
+                for _ in range(20):
+                    data_list.append(seq)
+
+            data_to_save = np.array(data_list, dtype=object)
+            np.save(STROKE_FILE_PATH, data_to_save)
+            
+            print(f"Saved vector stroke. Total samples: {len(data_list)}")
         
         self.CHARACTER_TO_COLLECT = self.INDEX_TO_CHAR.get(self.INDEX_OF_CHARACTER)
         
-        print(f"Character to collect: {self.CHARACTER_TO_COLLECT}")
+        print(f"Next character: {self.CHARACTER_TO_COLLECT}")
         
+        self.strokes.clear()
         self.clear_canvas()
         
     def recognize_char(self):
@@ -232,23 +244,23 @@ class DrawingApp:
         
         print(f"Prediction: {predicted_char}\tConfidence: {top_prob:.2f}\tMargin: {margin:.2f}")
         
-    def test(self):
+    def draw_char(self):
         self.canvas.delete("all")
         
         self.lastX = 0
         self.lastY = 0
-        
-        strokes = preprocess_strokes(self.strokes).tolist()
-        
-        print(strokes)
+
+        strokes = self.preprocess_strokes()
+        strokes = to_relative_strokes(strokes)
 
         # Center of mass lol
         abs_coors = []
         c_x, c_y = 0, 0
 
         for stroke in strokes:
-            c_x += stroke[0] * 1
-            c_y += stroke[1] * 1
+            print(stroke)
+            c_x += stroke[0]
+            c_y += stroke[1]
             
             abs_coors.append((c_x, c_y))
         
@@ -268,7 +280,7 @@ class DrawingApp:
             x = self.lastX + stroke[0]
             y = self.lastY + stroke[1]
             
-            if stroke[2]:
+            if stroke[2] == 0:
                 self.canvas.create_line(
                     self.lastX, 
                     self.lastY, 
@@ -282,6 +294,8 @@ class DrawingApp:
                 
             self.lastX = x
             self.lastY = y
+            
+        self.strokes.clear()
 
 if __name__ == "__main__":
     print("Character to collect: 你")
