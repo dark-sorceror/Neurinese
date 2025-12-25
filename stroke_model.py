@@ -43,7 +43,7 @@ class StrokeEncoder(nn.Module):
             out_features = latent_size
         )
 
-    def forward(self, stroke_seq):
+    def forward(self, stroke_seq: torch.Tensor):
         # stroke_seq shape: (batch_size, seq_len, input_size = 3)
 
         # Final hidden state
@@ -56,7 +56,7 @@ class StrokeEncoder(nn.Module):
 
         return mean_dist, log_var
 
-    def reparameterize(self, mean_dist, log_var):
+    def reparameterize(self, mean_dist: torch.Tensor, log_var: torch.Tensor):
         # https://medium.com/data-science/reparameterization-trick-126062cfd3c3
         std = torch.exp(0.5 * log_var)
         eps = torch.randn_like(std)
@@ -123,11 +123,21 @@ class StrokeDecoder(nn.Module):
         return output, hidden_state
 
 class KLDivergenceLoss(nn.Module):
-    def forward(self, log_var: torch.Tensor, mean_dist: torch.Tensor):
+    def forward(
+        self, 
+        log_var: torch.Tensor, 
+        mean_dist: torch.Tensor
+    ):
         return -0.5 * torch.sum(1 + log_var - mean_dist ** 2 - torch.exp(log_var))
 
 class ReconstructionLoss(nn.Module):
-    def forward(self, pred, target, mean_dist, log_var):
+    def forward(
+        self, 
+        pred: torch.Tensor, 
+        target: torch.Tensor, 
+        mean_dist: torch.Tensor, 
+        log_var: torch.Tensor
+    ):
         coor_loss = F.mse_loss(
             input = pred[..., :2], 
             target = target[..., :2]
@@ -136,7 +146,10 @@ class ReconstructionLoss(nn.Module):
         pen_loss = F.binary_cross_entropy_with_logits(
             input = pred[..., 2],
             target = target[..., 2],
-            pos_weight = torch.tensor([5.0], device = pred.device)
+            pos_weight = torch.tensor(
+                [5.0], 
+                device = pred.device
+            )
         )
         
         kl = KLDivergenceLoss()
@@ -170,7 +183,7 @@ class StrokeModel(nn.Module):
             num_layers = num_layers
         )
     
-    def forward(self, stroke_seq):
+    def forward(self, stroke_seq: torch.Tensor):
         mean_dist, log_var = self.encoder(stroke_seq)
         z = self.encoder.reparameterize(mean_dist, log_var)
         

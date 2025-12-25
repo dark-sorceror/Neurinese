@@ -3,8 +3,8 @@ from pathlib import Path
 from torch.utils.data import DataLoader
 from sklearn.model_selection import train_test_split
 
-from trainer import Trainer
-from model import CharacterRecognizer, CharacterDataset
+from trainer import CharacterRecognizingTrainer
+from character_model import CharacterRecognizer, CharacterDataset
 
 IMAGE_SIZE = 64
 NUM_CLASSES = 3
@@ -33,27 +33,36 @@ def split_data(x, y, train = 0.8, val = 0.1):
 
 if __name__ == "__main__":
     try:
-        X_data = np.load(DATA_ROOT / "image.npy") 
-        Y_labels = np.load(DATA_ROOT / "label.npy")
+        x_data = np.load(DATA_ROOT / "image.npy") 
+        y_labels = np.load(DATA_ROOT / "label.npy")
     except FileNotFoundError:
         print("ERROR: Files not fouund")
         
         exit()
         
-    x_train, x_val, x_test, y_train, y_val, y_test = split_data(X_data, Y_labels)
+    x_train, x_val, x_test, y_train, y_val, y_test = split_data(x_data, y_labels)
 
-    train_ds = CharacterDataset(x_train, y_train)
-    val_ds = CharacterDataset(x_val, y_val)
-    test_ds = CharacterDataset(x_test, y_test) 
+    train_ds = CharacterDataset(
+        data = x_train, 
+        labels = y_train
+    )
+    val_ds = CharacterDataset(
+        data = x_val, 
+        labels = y_val
+    )
+    test_ds = CharacterDataset(
+        data = x_test, 
+        labels = y_test
+    ) 
 
     train_loader = DataLoader(
-        train_ds, 
+        dataset = train_ds, 
         batch_size = 64, 
         shuffle = True, 
         num_workers = 4
     )
     val_loader = DataLoader(
-        val_ds, 
+        dataset = val_ds, 
         batch_size = 64, 
         num_workers = 4
     )
@@ -65,7 +74,7 @@ if __name__ == "__main__":
 
     model = CharacterRecognizer(num_classes = NUM_CLASSES)
 
-    trainer = Trainer(model) 
+    trainer = CharacterRecognizingTrainer(model) 
 
     x, y = next(iter(train_loader))
     

@@ -20,7 +20,7 @@ class CharacterDataset(Dataset):
         return image_tensor, label_tensor
 
 class CharacterRecognizer(nn.Module):
-    def __init__(self, num_classes, input_channels = 1):
+    def __init__(self, num_classes: int, input_channels: int = 1):
         super().__init__()
         
         self.model = nn.Sequential(

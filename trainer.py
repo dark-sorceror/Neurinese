@@ -2,10 +2,10 @@ import torch
 import numpy as np
 import torch.nn as nn
 import torch.optim as optim
-import matplotlib.pyplot as plt
 from torch.utils.data import DataLoader
 from torch.nn.utils.rnn import pad_sequence
 
+from utils import plot_strokes
 from preprocess import normalize, to_relative
 from stroke_model import StrokeModel, StrokeDataset, ReconstructionLoss
 
@@ -242,84 +242,74 @@ class HandwritingTrainer:
                 
         print(f"Training finished. Best Validation Loss: {best_val_loss:.4f}")
 
-collate_fn = lambda batch: pad_sequence(batch, batch_first = True)
+DATA_PATH = "./data/strokes.npy"
+MODEL_PATH = "./model/handwriting_model.pth"
 
-samples = np.load("./data/strokes.npy", allow_pickle = True)
-raw_data = [seq.astype(np.float32) for seq in samples]
+if __name__ == "__main__":
+    collate_fn = lambda batch: pad_sequence(batch, batch_first = True)
 
-processed_samples = []
+    samples = np.load(DATA_PATH, allow_pickle = True)
+    raw_data = [seq.astype(np.float32) for seq in samples]
 
-for raw in raw_data:
-    seq_abs = raw.copy()
-    seq_abs = normalize(seq_abs)
-    
-    seq = to_relative(seq_abs)
+    processed_samples = []
 
-    processed_samples.append(seq)
+    for raw in raw_data:
+        seq_abs = raw.copy()
+        seq_abs = normalize(seq_abs)
+        seq = to_relative(seq_abs)
 
-# Overfit on a single sample
-single_sample = processed_samples[0]
-debug_samples = [single_sample for _ in range(100)]
+        processed_samples.append(seq)
 
-dataset = StrokeDataset(debug_samples)
+    # Overfit on a single sample - perfect memorization and learning
+    single_sample = processed_samples[0]
+    debug_samples = [single_sample for _ in range(100)]
 
-train_size = int(0.9 * len(dataset))
-val_size = len(dataset) - train_size
-train_ds, val_ds = torch.utils.data.random_split(dataset, [train_size, val_size])
+    dataset = StrokeDataset(debug_samples)
 
-train_loader = DataLoader(
-    dataset = train_ds, 
-    batch_size = 1, 
-    shuffle = True, 
-    collate_fn = collate_fn
-)
-val_loader = DataLoader(
-    dataset = val_ds, 
-    batch_size = 1, 
-    shuffle = False, 
-    collate_fn = collate_fn
-)
+    train_size = int(0.9 * len(dataset))
+    val_size = len(dataset) - train_size
+    train_ds, val_ds = torch.utils.data.random_split(dataset, [train_size, val_size])
 
-model = StrokeModel(
-    input_size = len(single_sample[0]),
-    hidden_size = 256,
-    latent_size = 64,
-    num_layers = 1
-)
-trainer = HandwritingTrainer(
-    model = model, 
-    learning_rate = 0.001
-)
-trainer.fit(
-    train_loader = train_loader, 
-    val_loader = val_loader, 
-    epochs = 100, 
-    checkpoint_path = "./model/handwriting_model.pth"
-)
+    train_loader = DataLoader(
+        dataset = train_ds, 
+        batch_size = 1, 
+        shuffle = True, 
+        collate_fn = collate_fn
+    )
+    val_loader = DataLoader(
+        dataset = val_ds, 
+        batch_size = 1, 
+        shuffle = False, 
+        collate_fn = collate_fn
+    )
 
-sample = train_ds[0]
-recon = trainer.reconstruct(sample)
-gen = trainer.generate(sample)
+    model = StrokeModel(
+        input_size = len(single_sample[0]),
+        hidden_size = 256,
+        latent_size = 64,
+        num_layers = 1
+    )
+    trainer = HandwritingTrainer(
+        model = model, 
+        learning_rate = 0.001
+    )
+    trainer.fit(
+        train_loader = train_loader, 
+        val_loader = val_loader, 
+        epochs = 100, 
+        checkpoint_path = MODEL_PATH
+    )
 
-def plot_strokes(seq):
-    x, y = 0.0, 0.0
+    sample = train_ds[0]
+    recon = trainer.reconstruct(sample)
+    gen = trainer.generate(sample)
 
-    plt.figure(figsize = (4, 4))
+    # Plotting the dataset itself
+    plot_strokes(sample.numpy(), multiple = False)
 
-    for dx, dy, pen in seq:
-        dx, dy = dx / 100, dy / 100
-        nx, ny = x + dx, y + dy
+    # Reconstruction inference method (using ground truth)
+    plot_strokes(recon, multiple = False)
 
-        if pen > 0.5:
-            plt.plot([x, nx], [y, ny], 'k-', linewidth=2)
-
-        x, y = nx, ny
-
-    plt.gca().invert_yaxis()
-    plt.axis('equal')
-    plt.axis('off')
-    plt.show()
-    
-plot_strokes(sample.numpy())
-plot_strokes(recon)
-plot_strokes(gen)
+    # Generative (free hand) is buggy.
+    # TODO: Experiment with masking to pad samples
+    plot_strokes(gen, multiple = False)
