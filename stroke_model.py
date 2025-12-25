@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 from torch.utils.data import Dataset
-import torch.functional as F
+import torch.nn.functional as F
 
 class StrokeDataset(Dataset):
     def __init__(self, data):
@@ -20,49 +20,41 @@ class StrokeDataset(Dataset):
 class StrokeEncoder(nn.Module):
     def __init__(
         self, 
-        input_dim = 4,
-        hidden_size = 512, 
-        latent_dim = 256, 
-        num_layers = 2
+        input_size = 3,
+        hidden_size = 256, 
+        latent_size = 64, 
+        num_layers = 1
     ):
         super().__init__()
-        
-        # Bi-directional LSTM to process the sequence from both directions
+
         self.model = nn.LSTM(
-            input_size = input_dim,
+            input_size = input_size,
             hidden_size = hidden_size,
             num_layers = num_layers,
-            bidirectional = True,
             batch_first = True
         )
         
-        output_size = 2 * hidden_size
-        
         self.m_h = nn.Linear(
-            in_features = output_size, 
-            out_features = latent_dim
+            in_features = hidden_size, 
+            out_features = latent_size
         )
         self.lv_h = nn.Linear(
-            in_features = output_size, 
-            out_features = latent_dim
+            in_features = hidden_size, 
+            out_features = latent_size
         )
 
     def forward(self, stroke_seq):
-        # stroke_seq shape: (batch_size, seq_len, 4)
+        # stroke_seq shape: (batch_size, seq_len, input_size = 3)
 
         # Final hidden state
-        h_s = self.model(stroke_seq)[1][0]
-
-        final_forward = h_s[-2]
-        final_backward = h_s[-1]
-        final_state = torch.cat([final_forward, final_backward], dim = 1)
-
-        mean_dist = self.m_h(final_state)
-        log_var = self.lv_h(final_state)
+        _, (h_n, _) = self.model(stroke_seq)
         
-        z = self.reparameterize(mean_dist, log_var)
-        
-        return z, mean_dist, log_var
+        h_n = h_n[-1]
+
+        mean_dist = self.m_h(h_n)
+        log_var = self.lv_h(h_n)
+
+        return mean_dist, log_var
 
     def reparameterize(self, mean_dist, log_var):
         # https://medium.com/data-science/reparameterization-trick-126062cfd3c3
@@ -70,141 +62,123 @@ class StrokeEncoder(nn.Module):
         eps = torch.randn_like(std)
         
         return mean_dist + eps * std
-    
+
 class StrokeDecoder(nn.Module):
     def __init__(
         self,
-        num_layers: int = 2,
-        hidden_size: int = 512, 
-        latent_dim: int = 256,
-        num_mixtures: int = 5
+        input_size: int = 3,
+        hidden_size: int = 256, 
+        latent_size: int = 64,
+        num_layers: int = 1,
     ):
         super().__init__()
-        
-        # Unidirectional LSTM for sequence generation
+
         self.model = nn.LSTM(
-            input_size = latent_dim + 4,
+            input_size = 64 + latent_size,
             hidden_size = hidden_size,
-            num_layers = 2,
+            num_layers = num_layers,
             batch_first = True
         )
         
-        self.initial = nn.Linear(
-            in_features = latent_dim, 
-            out_features = 2 * hidden_size * num_layers
+        self.embedding = nn.Linear(
+            in_features = input_size,
+            out_features = latent_size
         )
-
-        # MDN params: (pi, mean_x, mean_y, sigma_x, sigma_y, rho)
-        self.m_h = nn.Linear(
+        
+        self.z_to_hidden = nn.Linear(
+            in_features = latent_size, 
+            out_features = hidden_size
+        )
+        
+        self.output = nn.Linear(
             in_features = hidden_size, 
-            out_features = 6 * num_mixtures
+            out_features = input_size
         )
-        
-        self.p_h = nn.Linear(
-            in_features = hidden_size,
-            out_features = 2
-        )
-        
-        self.num_mixtures = num_mixtures
-        self.hidden_size = hidden_size
         
     def forward(
         self, 
-        stroke_seq_input: torch.Tensor, 
-        z: torch.Tensor
+        z: torch.Tensor,
+        stroke_seq: torch.Tensor, 
+        hidden_state: bool = None
     ):
-        # stroke_seq_input shape: (batch_size, seq_len, 4)
-        # z shape: (batch_size, 256)
+        # stroke_seq shape: (batch_size, seq_len, input_size = 3)
+        # z shape: (batch_size, latent_size = 64)
         
-        states = self.initial(z).view(2, 2, stroke_seq_input.size()[0], self.hidden_size)
-        h, c = states[0], states[1]
+        seq_len = stroke_seq.size(1)
+        z_ext = z.unsqueeze(1).repeat(1, seq_len, 1)
+        stroke_seq_emb = F.relu(self.embedding(stroke_seq))
         
-        z_ext = z.unsqueeze(1).expand(-1, stroke_seq_input.size()[1], -1)
-        stroke_seq_input = torch.cat([stroke_seq_input, z_ext], dim = -1)
+        dec_in = torch.cat([stroke_seq_emb, z_ext], dim = -1)
         
-        output, (h_n, c_n) = self.model(stroke_seq_input, (h, c))
+        if not hidden_state:
+            h_0 = torch.tanh(self.z_to_hidden(z))
+            c_0 = torch.zeros_like(h_0)
+            
+            hidden_state = (h_0.unsqueeze(0), c_0.unsqueeze(0))
         
-        mdn_params = self.mdn_linear(output)
-        p_l = self.p_h(output)
+        out, hidden_state = self.model(dec_in, hidden_state)
         
-        return mdn_params, p_l, (h_n, c_n)
+        output = self.output(out)
+        
+        return output, hidden_state
+
+class KLDivergenceLoss(nn.Module):
+    def forward(self, log_var: torch.Tensor, mean_dist: torch.Tensor):
+        return -0.5 * torch.sum(1 + log_var - mean_dist ** 2 - torch.exp(log_var))
 
 class ReconstructionLoss(nn.Module):
-    def split(self, mdn_params):
-        p_l = mdn_params[:, :, -2:]
-        mixture_params = mdn_params[:, :, :-2]
-        mixture_params = mixture_params.view(mixture_params.size(0), mixture_params.size(1))
+    def forward(self, pred, target, mean_dist, log_var):
+        coor_loss = F.mse_loss(
+            input = pred[..., :2], 
+            target = target[..., :2]
+        ) * 20.0
         
-        pi, mean_x, mean_y, sigma_x, sigma_y, rho = torch.split(mixture_params, 1, dim = 3)
+        pen_loss = F.binary_cross_entropy_with_logits(
+            input = pred[..., 2],
+            target = target[..., 2],
+            pos_weight = torch.tensor([5.0], device = pred.device)
+        )
         
-        pi = F.softmax(pi, dim = 2)
-        sigma_x = torch.exp(sigma_x)
-        sigma_y = torch.exp(sigma_y)
-        rho = torch.tanh(rho)
+        kl = KLDivergenceLoss()
         
-        return pi, mean_x, mean_y, sigma_x, sigma_y, rho, p_l
+        kl_loss = kl(log_var, mean_dist)
+        kl_loss = kl_loss / pred.size(0)
         
-    def forward(
-        self, 
-        mdn_params: torch.Tensor, 
-        target: torch.Tensor, 
-        num_mixtures: int = 5
-    ):
-        pi, mean_x, mean_y, sigma_x, sigma_y, rho, p_l = self.split(mdn_params, num_mixtures)
-        
-        # target shape: (batch, seq_len, 4)
-        
-        dx = target[:, :, 0:1].unsqueeze(2)
-        dy = target[:, :, 1:2].unsqueeze(2)
-        
-        z_x = ((dx - mean_x) / sigma_x) ** 2
-        z_y = ((dy -mean_y) / sigma_y) ** 2
-        z_xy = (2 * rho * (dx - mean_x) * (dy - mean_y)) / (sigma_x * sigma_y)
-        
-        exp = z_x + z_y - z_xy
-        norm = 2 * torch.pi * sigma_x * sigma_y * torch.sqrt(1 - (rho ** 2))
-        
-        prob = torch.exp(-exp / (2 * (1 - (rho ** 2)))) / norm
-        prob_sum = torch.sum(pi * prob, dim=2)
-        nll_stroke = -torch.log(prob_sum + 1e-6)
-        
-        pen_targets = target[:, :, 2:]
-        nll_pen = F.binary_cross_entropy_with_logits(p_l, pen_targets, reduction = "none")
-        
-        total = nll_stroke.sum() + nll_pen.sum()
-        
-        return total
-
-class HandwritingModel(nn.Module):
+        return coor_loss + pen_loss + (kl_loss * 0.05)
+    
+class StrokeModel(nn.Module):
     def __init__(
         self, 
-        num_classes = 2, 
-        latent_dim = 256, 
-        hidden_size = 512, 
-        num_mixtures = 5
+        input_size: int = 3, 
+        hidden_size: int = 256, 
+        latent_size: int = 64, 
+        num_layers: int = 1
     ):
         super().__init__()
         
         self.encoder = StrokeEncoder(
-            latent_dim = latent_dim, 
-            hidden_size = hidden_size
+            input_size = input_size,
+            hidden_size = hidden_size,
+            latent_size = latent_size,
+            num_layers = num_layers
         )
+        
         self.decoder = StrokeDecoder(
-            hidden_size = hidden_size, 
-            num_mixtures = num_mixtures
+            input_size = input_size,
+            hidden_size = hidden_size,
+            latent_size = latent_size,
+            num_layers = num_layers
         )
-
-    def forward(self, stroke_seq, char_ids):
-        # stroke_seq shape: (batch_size, seq_len, 4)
+    
+    def forward(self, stroke_seq):
+        mean_dist, log_var = self.encoder(stroke_seq)
+        z = self.encoder.reparameterize(mean_dist, log_var)
         
-        z, mean_dist, log_var = self.encoder(stroke_seq)
+        # Teacher forcing by shifting inputs (i + 1)
+        batch_size = stroke_seq.size(0)
+        sos = torch.zeros(batch_size, 1, 3, device = stroke_seq.device)
         
-        # wait
+        dec_in = torch.cat([sos, stroke_seq[:, :-1, :]], dim = 1)
+        out, _ = self.decoder(z, dec_in)
         
-        mdn_params = self.decoder(
-            char_ids = char_ids, 
-            z = z, 
-            stroke_seq_input = stroke_seq_input
-        )[0]
-        
-        return mdn_params, mean_dist, log_var
+        return out, mean_dist, log_var
