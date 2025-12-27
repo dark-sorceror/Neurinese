@@ -7,7 +7,7 @@ DATA_PATH = "./data/strokes.npy"
 if __name__ == "__main__":
     samples = np.load(DATA_PATH, allow_pickle = True)
     raw_data = [seq.astype(np.float32) for seq in samples]
-
+    
     processed_samples = []
 
     for raw in raw_data:
@@ -16,4 +16,4 @@ if __name__ == "__main__":
 
         processed_samples.append(seq)
         
-    plot_strokes(processed_samples[:120:20])
+    plot_strokes(processed_samples[0:2])

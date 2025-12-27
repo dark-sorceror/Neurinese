@@ -10,7 +10,7 @@ IMAGE_SIZE = 64
 NUM_CLASSES = 3
 
 DATA_ROOT = Path("./data")
-MODEL_SAVE_PATH = Path("./CNN_char_model.pth")
+MODEL_SAVE_PATH = Path("./models/char_recognizing_model.pth")
 
 def split_data(x, y, train = 0.8, val = 0.1):
     x_train, x_temp, y_train, y_temp = train_test_split(
@@ -57,13 +57,13 @@ if __name__ == "__main__":
 
     train_loader = DataLoader(
         dataset = train_ds, 
-        batch_size = 64, 
+        batch_size = 1, 
         shuffle = True, 
         num_workers = 4
     )
     val_loader = DataLoader(
         dataset = val_ds, 
-        batch_size = 64, 
+        batch_size = 1, 
         num_workers = 4
     )
     test_loader = DataLoader(
@@ -85,7 +85,8 @@ if __name__ == "__main__":
     trainer.fit(
         train_loader = train_loader,
         val_loader = val_loader,
-        epochs = 50,
+        epochs = 200,
+        patience = 10,
         checkpoint_path = MODEL_SAVE_PATH
     )
 

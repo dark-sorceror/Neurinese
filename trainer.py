@@ -14,16 +14,18 @@ class CharacterRecognizingTrainer:
         self, 
         model: nn.Module, 
         learning_rate: float, 
-        device = None
+        device: str = None
     ):
         self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
         self.model = model.to(self.device)
-        self.criterion = nn.CrossEntropyLoss(label_smoothing = 0.1)
         self.optimizer = optim.Adam(
             model.parameters(),
             lr = learning_rate,
             weight_decay = 0.0001
         )
+        
+        self.criterion = nn.CrossEntropyLoss(label_smoothing = 0.1)
+        
         self.history = {
             "train_loss": [],
             "val_loss": []
@@ -70,7 +72,8 @@ class CharacterRecognizingTrainer:
         self, 
         train_loader: DataLoader, 
         val_loader: DataLoader, 
-        epochs: int, 
+        epochs: int,
+        patience: int,
         checkpoint_path: str = None
     ):
         best_val_loss = float("inf")
@@ -92,9 +95,9 @@ class CharacterRecognizingTrainer:
             else:
                 epochs_no_improve += 1
                 
-                print(f"Epoch {epoch:3d}/{epochs}: Training Loss: {train_loss:.4f} Validation Loss: {val_loss:.4f} (No improvement)")
+                print(f"Epoch {epoch:3d}/{epochs}: Training Loss: {train_loss:.4f} Validation Loss: {val_loss:.4f} (No improvement) x{epochs_no_improve}")
                 
-            if epochs_no_improve >= 5:     
+            if epochs_no_improve >= patience:     
                 self.model.load_state_dict(torch.load(checkpoint_path))
                 
                 break
@@ -106,7 +109,7 @@ class HandwritingTrainer:
         self, 
         model: nn.Module, 
         learning_rate: float, 
-        device = None
+        device: str = None
     ):
         self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
         self.model = model.to(self.device)
@@ -209,7 +212,8 @@ class HandwritingTrainer:
         self, 
         train_loader: DataLoader,
         val_loader: DataLoader,
-        epochs: int, 
+        epochs: int,
+        patience: int,
         checkpoint_path: str = None
     ):
         best_val_loss = float("inf")
@@ -233,9 +237,9 @@ class HandwritingTrainer:
             else:
                 epochs_no_improve += 1
                 
-                print(f"Epoch {epoch:3d}/{epochs}: Training Loss: {train_loss:.4f} KL: {kl_w:.4f} Validation Loss: {val_loss:.4f} (No improvement)")
+                print(f"Epoch {epoch:3d}/{epochs}: Training Loss: {train_loss:.4f} KL: {kl_w:.4f} Validation Loss: {val_loss:.4f} (No improvement) x{epochs_no_improve}")
                 
-            if epochs_no_improve >= 5:
+            if epochs_no_improve >= patience:
                 self.model.load_state_dict(torch.load(checkpoint_path))
                 
                 break
@@ -243,7 +247,7 @@ class HandwritingTrainer:
         print(f"Training finished. Best Validation Loss: {best_val_loss:.4f}")
 
 DATA_PATH = "./data/strokes.npy"
-MODEL_PATH = "./model/handwriting_model.pth"
+MODEL_PATH = "./models/handwriting_model.pth"
 
 if __name__ == "__main__":
     collate_fn = lambda batch: pad_sequence(batch, batch_first = True)
@@ -262,7 +266,7 @@ if __name__ == "__main__":
 
     # Overfit on a single sample - perfect memorization and learning
     single_sample = processed_samples[0]
-    debug_samples = [single_sample for _ in range(100)]
+    debug_samples = [single_sample for _ in range(300)]
 
     dataset = StrokeDataset(debug_samples)
 
@@ -270,6 +274,7 @@ if __name__ == "__main__":
     val_size = len(dataset) - train_size
     train_ds, val_ds = torch.utils.data.random_split(dataset, [train_size, val_size])
 
+    # Train with batch size of one to prevent any padding
     train_loader = DataLoader(
         dataset = train_ds, 
         batch_size = 1, 
@@ -296,7 +301,8 @@ if __name__ == "__main__":
     trainer.fit(
         train_loader = train_loader, 
         val_loader = val_loader, 
-        epochs = 100, 
+        epochs = 100,
+        patience = 10,
         checkpoint_path = MODEL_PATH
     )
 

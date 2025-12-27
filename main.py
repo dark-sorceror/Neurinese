@@ -6,7 +6,7 @@ from PIL import Image, ImageDraw
 from tkinter import Canvas, Button
 
 from character_model import CharacterRecognizer
-from preprocess import preprocess_pil_image, to_relative_strokes
+from preprocess import preprocess_pil_image, to_relative, normalize
 
 CANVAS_SIZE = 300
 MODEL_SIZE = 64
@@ -177,37 +177,53 @@ class DrawingApp:
         processed_input = self.preprocess_image()
         
         if processed_input is None: return
-
-        label = np.array([self.INDEX_OF_CHARACTER], dtype=np.int64)
+        
+        image_batch = np.repeat(np.expand_dims(processed_input, axis = 0), 20, axis = 0)
+        label_batch = np.full(10, self.INDEX_OF_CHARACTER, dtype = np.int64)
         
         if not IMAGE_FILE_PATH.exists():
-            np.save(IMAGE_FILE_PATH, np.expand_dims(processed_input, axis=0))
-            np.save(LABEL_FILE_PATH, label)
+            np.save(IMAGE_FILE_PATH, image_batch)
+            np.save(LABEL_FILE_PATH, label_batch)
+            
+            print(f"Saved character drawing. Total samples: {image_batch.shape[0]}")
         else:
             images = np.load(IMAGE_FILE_PATH)
             labels = np.load(LABEL_FILE_PATH)
-            updated_images = np.concatenate([images, np.expand_dims(processed_input, axis=0)], axis=0)
-            updated_labels = np.concatenate([labels, label], axis=0)
-            np.save(IMAGE_FILE_PATH, updated_images)
-            np.save(LABEL_FILE_PATH, updated_labels)
+            
+            updated_image_batch = np.concatenate([images, image_batch], axis = 0)
+            updated_labels_batch = np.concatenate([labels, label_batch], axis = 0)
+            
+            np.save(IMAGE_FILE_PATH, updated_image_batch)
+            np.save(LABEL_FILE_PATH, updated_labels_batch)
+            
+            print(f"Saved character drawing. Total samples: {updated_image_batch.shape[0]}")
 
         seq = self.preprocess_strokes()
         
-        if len(seq) > 0:
-            if not STROKE_FILE_PATH.exists():
-                data_list = [seq]
-            else:
-                current_strokes_array = np.load(STROKE_FILE_PATH, allow_pickle=True)
-                data_list = list(current_strokes_array)
-                
-                for _ in range(20):
-                    data_list.append(seq)
+        if len(seq) == 0: return
 
-            data_to_save = np.array(data_list, dtype=object)
-            np.save(STROKE_FILE_PATH, data_to_save)
+        if not STROKE_FILE_PATH.exists():
+            stroke_batch = [seq]
+        else:
+            strokes = np.load(STROKE_FILE_PATH, allow_pickle = True)
+            stroke_batch = list(strokes)
             
-            print(f"Saved vector stroke. Total samples: {len(data_list)}")
+            for _ in range(20):
+                stroke_batch.append(seq)
+
+        stroke_array = np.array(stroke_batch, dtype = object)
+        np.save(STROKE_FILE_PATH, stroke_array)
+    
+        print(f"Saved vector stroke. Total samples: {len(stroke_batch)}")
         
+        # No conditional VAE yet; overfitting on a single sample
+        """
+        if self.INDEX_OF_CHARACTER == len(self.INDEX_TO_CHAR) - 1:
+            self.INDEX_OF_CHARACTER = 0
+        else:
+            self.INDEX_OF_CHARACTER += 1
+        """
+            
         self.CHARACTER_TO_COLLECT = self.INDEX_TO_CHAR.get(self.INDEX_OF_CHARACTER)
         
         print(f"Next character: {self.CHARACTER_TO_COLLECT}")
@@ -251,16 +267,15 @@ class DrawingApp:
         self.lastY = 0
 
         strokes = self.preprocess_strokes()
-        strokes = to_relative_strokes(strokes)
+        strokes = to_relative(strokes)
 
         # Center of mass lol
         abs_coors = []
         c_x, c_y = 0, 0
 
         for stroke in strokes:
-            print(stroke)
-            c_x += stroke[0]
-            c_y += stroke[1]
+            c_x += stroke[0] / 100
+            c_y += stroke[1] / 100
             
             abs_coors.append((c_x, c_y))
         
@@ -277,8 +292,8 @@ class DrawingApp:
         self.lastY = 0 + offset_y
         
         for stroke in strokes: 
-            x = self.lastX + stroke[0]
-            y = self.lastY + stroke[1]
+            x = self.lastX + stroke[0] / 100
+            y = self.lastY + stroke[1] / 100
             
             if stroke[2] == 0:
                 self.canvas.create_line(
