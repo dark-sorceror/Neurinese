@@ -99,18 +99,20 @@ class StrokeDecoder(nn.Module):
         self, 
         z: torch.Tensor,
         stroke_seq: torch.Tensor, 
-        hidden_state: bool = None
+        hidden_state: torch.Tensor = None
     ):
         # stroke_seq shape: (batch_size, seq_len, input_size = 3)
         # z shape: (batch_size, latent_size = 64)
         
         seq_len = stroke_seq.size(1)
         z_ext = z.unsqueeze(1).repeat(1, seq_len, 1)
+        
+        # Teacher Forcing: Taking directly from the stroke dataset
         stroke_seq_emb = F.relu(self.embedding(stroke_seq))
         
         dec_in = torch.cat([stroke_seq_emb, z_ext], dim = -1)
         
-        if not hidden_state:
+        if hidden_state is None:
             h_0 = torch.tanh(self.z_to_hidden(z))
             c_0 = torch.zeros_like(h_0)
             
@@ -157,7 +159,7 @@ class ReconstructionLoss(nn.Module):
         kl_loss = kl(log_var, mean_dist)
         kl_loss = kl_loss / pred.size(0)
         
-        return coor_loss + pen_loss + (kl_loss * 0.05)
+        return coor_loss + pen_loss, kl_loss
     
 class StrokeModel(nn.Module):
     def __init__(
@@ -187,7 +189,7 @@ class StrokeModel(nn.Module):
         mean_dist, log_var = self.encoder(stroke_seq)
         z = self.encoder.reparameterize(mean_dist, log_var)
         
-        # Teacher forcing by shifting inputs (i + 1)
+        # Teacher forcing by shifting inputs (0, ..., i - 1)
         batch_size = stroke_seq.size(0)
         sos = torch.zeros(batch_size, 1, 3, device = stroke_seq.device)
         

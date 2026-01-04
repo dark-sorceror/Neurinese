@@ -130,11 +130,15 @@ class HandwritingTrainer:
         
         total_loss = 0.0
         
-        for seq in loader:
+        for i, seq in enumerate(loader):
+            kl_w = min(0.05, 0.05 * (i / 2000))
+            
             seq = seq.to(self.device)
             
             pred, mean_dist, log_var = self.model(seq)
-            loss = self.criterion(pred, seq, mean_dist, log_var)
+            loss, kl = self.criterion(pred, seq, mean_dist, log_var)
+            
+            loss = loss + kl * kl_w
             
             self.optimizer.zero_grad()
             loss.backward()
@@ -150,11 +154,15 @@ class HandwritingTrainer:
         
         total_loss = 0.0
         
-        for seq in loader:
+        for i, seq in enumerate(loader):
+            kl_w = min(0.05, 0.05 * (i / 2000))
+            
             seq = seq.to(self.device)
             
             pred, mean_dist, log_var = self.model(seq)
-            loss = self.criterion(pred, seq, mean_dist, log_var)
+            loss, kl = self.criterion(pred, seq, mean_dist, log_var)
+            
+            loss = loss + kl * kl_w
             
             total_loss += loss.item() * seq.size(0)
         
@@ -219,7 +227,7 @@ class HandwritingTrainer:
         best_val_loss = float("inf")
         
         for epoch in range(epochs):
-            kl_w = min(0.05, epoch / 200)
+            kl_w = min(0.05, 0.05 * epoch / 200)
             
             train_loss = self.train(train_loader)
             val_loss = self.validate(val_loader)
