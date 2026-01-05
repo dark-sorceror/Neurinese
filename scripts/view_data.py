@@ -1,4 +1,5 @@
 import numpy as np
+
 from utils import plot_strokes
 from preprocess import normalize, to_relative
 
