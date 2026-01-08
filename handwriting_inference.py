@@ -63,32 +63,42 @@ class Handwrite:
         
         return np.array(out_seq)
 
-device = "cuda" if torch.cuda.is_available() else "cpu"
+if __name__ == "__main__":
+    device = "cuda" if torch.cuda.is_available() else "cpu"
 
-model = StrokeModel(
-    input_size = 3,
-    hidden_size = 256,
-    latent_size = 64,
-    num_layers = 1
-).to(device)
+    model = StrokeModel(
+        input_size = 3,
+        hidden_size = 256,
+        latent_size = 64,
+        num_layers = 1
+    ).to(device)
 
-model.load_state_dict(torch.load(
-        "models/handwriting_model.pth", 
-        map_location = device
+    model.load_state_dict(torch.load(
+            "models/handwriting_model.pth", 
+            map_location = device
+        )
     )
-)
 
-generator = Handwrite(model = model, device = device)
+    generator = Handwrite(model = model, device = device)
 
-samples = np.load("./data/strokes.npy", allow_pickle = True)
-single_raw = samples[0].astype(np.float32)
-single_rel = to_relative(normalize(single_raw))
-sample_tensor = torch.tensor(single_rel, dtype = torch.float32).unsqueeze(0).to(device)
+    samples = np.load("./data/strokes.npy", allow_pickle = True)
+    single_raw = samples[0].astype(np.float32)
+    single_rel = to_relative(normalize(single_raw))
 
-model.eval()
-with torch.no_grad():
-    mean_dist, log_var = model.encoder(sample_tensor)
-    z = mean_dist
+    debug_samples = [single_rel] 
+    dataset_obj = StrokeDataset(debug_samples) 
 
-gen_strokes = generator.generate(z = z)
-plot_strokes(gen_strokes, multiple = False)
+    sample_tensor = dataset_obj[0] 
+    sample_batch = sample_tensor.unsqueeze(0).to(device)
+
+    model.eval()
+    with torch.no_grad():
+        mean_dist, log_var = model.encoder(sample_batch)
+        z = mean_dist
+
+    # gen_strokes = generator.generate(z = z)
+
+    recon = generator.reconstruct(sample_tensor)
+    print(recon)
+    plot_strokes(sample_tensor.cpu().numpy(), multiple = False)
+    plot_strokes(recon, multiple = False)
