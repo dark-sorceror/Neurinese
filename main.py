@@ -1,3 +1,4 @@
+import time
 import torch
 import numpy as np
 import tkinter as tk
@@ -7,6 +8,8 @@ from tkinter import Canvas, Button
 
 from character_model import CharacterRecognizer
 from preprocess import preprocess_pil_image, to_relative, normalize
+from stroke_model import StrokeDataset, StrokeModel
+from handwriting_inference import Handwrite
 
 CANVAS_SIZE = 300
 MODEL_SIZE = 64
@@ -79,6 +82,13 @@ class DrawingApp:
             command = self.draw_char
         )
         self.draw_btn.pack(side = tk.LEFT, padx = 5)
+        
+        self.generate_btn = Button(
+            master, 
+            text = "Generate", 
+            command = self.generate_char
+        )
+        self.generate_btn.pack(side = tk.LEFT, padx = 5)
         
         self.CHARACTER_TO_COLLECT = "你"
         self.INDEX_OF_CHARACTER = 0
@@ -230,7 +240,8 @@ class DrawingApp:
         
         self.strokes.clear()
         self.clear_canvas()
-        
+    
+    @torch.no_grad()    
     def recognize_char(self):
         if not self.model:
             return
@@ -240,8 +251,7 @@ class DrawingApp:
         input_tensor = torch.from_numpy(input_data).unsqueeze(0).to(self.device)
         input_tensor = input_tensor.to(self.device)
         
-        with torch.no_grad():
-            outputs = self.model(input_tensor)
+        outputs = self.model(input_tensor)
         
         probs = torch.softmax(outputs, dim = 1).squeeze().cpu().numpy()
         
@@ -259,58 +269,174 @@ class DrawingApp:
         predicted_char = self.INDEX_TO_CHAR[top_idx]
         
         print(f"Prediction: {predicted_char}\tConfidence: {top_prob:.2f}\tMargin: {margin:.2f}")
-        
+    
+    @torch.no_grad() 
     def draw_char(self):
-        self.canvas.delete("all")
-        
-        self.lastX = 0
-        self.lastY = 0
+        device = "cuda" if torch.cuda.is_available() else "cpu"
 
-        strokes = self.preprocess_strokes()
-        strokes = to_relative(strokes)
+        model = StrokeModel(
+            input_size = 3,
+            hidden_size = 256,
+            latent_size = 64,
+            num_layers = 1
+        ).to(device)
 
-        # Center of mass lol
-        abs_coors = []
-        c_x, c_y = 0, 0
+        model.load_state_dict(torch.load(
+                "models/handwriting_model.pth", 
+                map_location = device
+            )
+        )
 
-        for stroke in strokes:
-            c_x += stroke[0] / 100
-            c_y += stroke[1] / 100
+        generator = Handwrite(model = model, device = device)
+
+        samples = np.load("./data/strokes.npy", allow_pickle = True)
+        single_raw = samples[0].astype(np.float32)
+        single_rel = to_relative(normalize(single_raw))
+
+        debug_samples = [single_rel] 
+        dataset_obj = StrokeDataset(debug_samples) 
+        sample_tensor = dataset_obj[0] .unsqueeze(0).to(device)
+
+        model.eval()
+        mean_dist, log_var = model.encoder(sample_tensor)
+        z = mean_dist
+
+        # gen_strokes = generator.generate(z = z)
             
-            abs_coors.append((c_x, c_y))
-        
-        min_x, max_x = min([p[0] for p in abs_coors]), max([p[0] for p in abs_coors])
-        min_y, max_y = min([p[1] for p in abs_coors]), max([p[1] for p in abs_coors])
+        seq = sample_tensor.cpu().numpy()
 
-        drawing_width = max_x - min_x
-        drawing_height = max_y - min_y
+        min_x, max_x = 0, 0
+        min_y, max_y = 0, 0
+        curr_x, curr_y = 0, 0
 
-        offset_x = 150 - (min_x + drawing_width / 2)
-        offset_y = 150 - (min_y + drawing_height / 2)
-
-        self.lastX = 0 + offset_x
-        self.lastY = 0 + offset_y
-        
-        for stroke in strokes: 
-            x = self.lastX + stroke[0] / 100
-            y = self.lastY + stroke[1] / 100
+        for dx, dy, pen in seq:
+            curr_x += dx * 0.6
+            curr_y += dy * 0.6
             
-            if stroke[2] == 0:
+            min_x, max_x = min(min_x, curr_x), max(max_x, curr_x)
+            min_y, max_y = min(min_y, curr_y), max(max_y, curr_y)
+
+        self.canvas.update_idletasks() 
+        canvas_w = self.canvas.winfo_width()
+        canvas_h = self.canvas.winfo_height()
+        
+        drawing_w = max_x - min_x
+        drawing_h = max_y - min_y
+
+        start_x = (canvas_w - drawing_w) / 2 - min_x
+        start_y = (canvas_h - drawing_h) / 2 - min_y
+
+        x, y = start_x, start_y
+
+        def draw_step(index, curr_x, curr_y):
+            if index >= len(seq):
+                return
+
+            dx, dy, pen = seq[index]
+
+            nx = curr_x + (dx * 0.6)
+            ny = curr_y + (dy * 0.6)
+
+            if pen < 0.5:
                 self.canvas.create_line(
-                    self.lastX, 
-                    self.lastY, 
-                    x,
-                    y,
-                    fill = "white", 
-                    width = 7.5,
+                    x0 = curr_x,
+                    y0 = curr_y,
+                    x1 = nx,
+                    y1 = ny,
+                    fill = "white",
+                    width = 7.5, 
                     capstyle = tk.ROUND, 
                     smooth = tk.TRUE
                 )
-                
-            self.lastX = x
-            self.lastY = y
             
-        self.strokes.clear()
+            self.canvas.after(10, draw_step, index + 1, nx, ny)
+
+        draw_step(0, x, y)
+    
+    @torch.no_grad()
+    def generate_char(self):
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+
+        model = StrokeModel(
+            input_size = 3,
+            hidden_size = 256,
+            latent_size = 64,
+            num_layers = 1
+        ).to(device)
+
+        model.load_state_dict(torch.load(
+                "models/handwriting_model.pth", 
+                map_location = device
+            )
+        )
+
+        generator = Handwrite(model = model, device = device)
+
+        samples = np.load("./data/strokes.npy", allow_pickle = True)
+        single_raw = samples[0].astype(np.float32)
+        single_rel = to_relative(normalize(single_raw))
+
+        debug_samples = [single_rel] 
+        dataset_obj = StrokeDataset(debug_samples) 
+
+        sample_tensor = dataset_obj[0].unsqueeze(0).to(device)
+
+        model.eval()
+        
+        mean_dist, log_var = model.encoder(sample_tensor)
+        z = mean_dist
+
+        # gen_strokes = generator.generate(z = z)
+            
+        seq = generator.reconstruct(sample_tensor)
+
+        min_x, max_x = 0, 0
+        min_y, max_y = 0, 0
+        curr_x, curr_y = 0, 0
+
+        for dx, dy, pen in seq:
+            curr_x += dx * 0.6
+            curr_y += dy * 0.6
+            
+            min_x, max_x = min(min_x, curr_x), max(max_x, curr_x)
+            min_y, max_y = min(min_y, curr_y), max(max_y, curr_y)
+
+        self.canvas.update_idletasks() 
+        canvas_w = self.canvas.winfo_width()
+        canvas_h = self.canvas.winfo_height()
+        
+        drawing_w = max_x - min_x
+        drawing_h = max_y - min_y
+
+        start_x = (canvas_w - drawing_w) / 2 - min_x
+        start_y = (canvas_h - drawing_h) / 2 - min_y
+
+        x, y = start_x, start_y
+
+        def draw_step(index, curr_x, curr_y):
+            if index >= len(seq):
+                return
+
+            dx, dy, pen = seq[index]
+
+            nx = curr_x + (dx * 0.6)
+            ny = curr_y + (dy * 0.6)
+
+            if pen < 0.5:
+                self.canvas.create_line(
+                    x0 = curr_x,
+                    y0 = curr_y,
+                    x1 = nx,
+                    y1 = ny,
+                    fill = "white",
+                    width = 7.5, 
+                    capstyle = tk.ROUND, 
+                    smooth = tk.TRUE
+                )
+            
+            self.canvas.after(10, draw_step, index + 1, nx, ny)
+
+        draw_step(0, x, y)
 
 if __name__ == "__main__":
     print("Character to collect: 你")
