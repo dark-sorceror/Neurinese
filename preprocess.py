@@ -1,9 +1,10 @@
 import numpy as np
 from PIL import Image
+from deep_translator import GoogleTranslator
 
 MODEL_SIZE = 64
 
-def preprocess_pil_image(pil_img):
+def preprocess_pil_image(pil_img: Image):
     bbox = pil_img.getbbox()
     
     if bbox is None:
@@ -24,7 +25,7 @@ def preprocess_pil_image(pil_img):
     
     return np.expand_dims(img, axis = 0)
 
-def to_relative(seq):
+def to_relative(seq: np.array):
     out = []
     
     for i in range(1, len(seq)):
@@ -36,9 +37,18 @@ def to_relative(seq):
         
     return np.array(out, dtype = np.float32)
 
-def normalize(seq):
+def normalize(seq: np.array):
     seq[:, :2] -= seq[:, :2].mean(axis = 0, keepdims = True)
     scale = seq[:, :2].std() + 1e-6
     seq[:, :2] /= scale
     
     return seq
+
+def translate(phrase: str, en: bool):
+    return GoogleTranslator(
+        source = 'auto',
+        target = 'en' if en else 'zh-CN'
+    ).translate(phrase)
+    
+print(translate("天气非常", True))
+print(translate("very good", False))
