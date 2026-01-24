@@ -3,6 +3,8 @@ import torch.nn as nn
 from torch.utils.data import Dataset
 import torch.nn.functional as F
 
+from mdn import MDN
+
 class StrokeDataset(Dataset):
     def __init__(self, data):
         self.data = data
@@ -20,10 +22,10 @@ class StrokeDataset(Dataset):
 class StrokeEncoder(nn.Module):
     def __init__(
         self, 
-        input_size = 3,
-        hidden_size = 256, 
-        latent_size = 64, 
-        num_layers = 1
+        input_size: int = 3,
+        hidden_size: int = 256, 
+        latent_size: int = 64, 
+        num_layers: int = 1
     ):
         super().__init__()
 
@@ -70,6 +72,7 @@ class StrokeDecoder(nn.Module):
         hidden_size: int = 256, 
         latent_size: int = 64,
         num_layers: int = 1,
+        num_mixtures: int = 20
     ):
         super().__init__()
 
@@ -92,7 +95,7 @@ class StrokeDecoder(nn.Module):
         
         self.output = nn.Linear(
             in_features = hidden_size, 
-            out_features = input_size
+            out_features = 1 + num_mixtures * 6
         )
         
     def forward(
@@ -120,11 +123,11 @@ class StrokeDecoder(nn.Module):
         
         out, hidden_state = self.model(dec_in, hidden_state)
         
-        output = self.output(out)
+        params = self.output(out)
         
-        return output, hidden_state
+        return params, hidden_state
 
-class KLDivergenceLoss(nn.Module):
+class KLDivergence(nn.Module):
     def forward(
         self, 
         log_var: torch.Tensor, 
@@ -133,6 +136,13 @@ class KLDivergenceLoss(nn.Module):
         return -0.5 * torch.sum(1 + log_var - mean_dist ** 2 - torch.exp(log_var))
 
 class ReconstructionLoss(nn.Module):
+    def __init__(self, num_mixtures: int):
+        super().__init__()
+        
+        self.mdn_loss = MDN(num_mixtures = num_mixtures)
+        
+        self.kl_loss = KLDivergence()
+        
     def forward(
         self, 
         pred: torch.Tensor, 
@@ -140,10 +150,10 @@ class ReconstructionLoss(nn.Module):
         mean_dist: torch.Tensor, 
         log_var: torch.Tensor
     ):
-        coor_loss = F.mse_loss(
-            input = pred[..., :2], 
-            target = target[..., :2]
-        ) * 20.0
+        
+        coor_loss = self.mdn_loss(pred = pred, target = target)
+        
+        print(coor_loss)
         
         pen_loss = F.binary_cross_entropy_with_logits(
             input = pred[..., 2],
@@ -154,9 +164,7 @@ class ReconstructionLoss(nn.Module):
             )
         )
         
-        kl = KLDivergenceLoss()
-        
-        kl_loss = kl(log_var, mean_dist)
+        kl_loss = self.kl_loss(log_var, mean_dist)
         kl_loss = kl_loss / pred.size(0)
         
         return coor_loss + pen_loss, kl_loss

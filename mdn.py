@@ -1,55 +1,58 @@
 import torch
 import numpy as np
+import torch.nn as nn
 import torch.nn.functional as F
 
-target = torch.zeros(2, 5, 3)
-target[:, :, 0] = 1.0
-target[:, :, 1] = 0.0
-target[:, :, 2] = 1.0
+class MDN(nn.Module):
+    def __init__(self, num_mixtures: int):
+        super().__init__()
+        
+        self.num_mixtures = num_mixtures
+        
+    def forward(self, pred: torch.Tensor, target: torch.Tensor):
+        # 'target' shape: (batch_size, seq_len, input_size = 3)
+        # 'do' shape: (batch_size, seq_len, 1 + 6 * num_mixtures)
+            
+        pi_logits = pred[..., 1:1 + self.num_mixtures] 
+        
+        start_idx = 1 + self.num_mixtures
+        gaussian_params = pred[..., start_idx:].view(pred.size(0), pred.size(1), self.num_mixtures, 5)
+        
+        mu_x = gaussian_params[..., 0]
+        mu_y = gaussian_params[..., 1]
+        sigma_x_logits = gaussian_params[..., 2]
+        sigma_y_logits = gaussian_params[..., 3]
+        rho_logits = gaussian_params[..., 4]
 
-print(target)
+        pi = F.softmax(pi_logits, dim =- 1)
+        
+        sigma_x = torch.exp(sigma_x_logits) + 1e-6
+        sigma_y = torch.exp(sigma_y_logits) + 1e-6
+        
+        rho = torch.tanh(rho_logits)
 
-# 'target' shape: (batch_size, seq_len, input_size = 3)
-# 'do' shape: (batch_size, seq_len, 1 + 6 * num_mixtures)
-    
-dx_target = target[..., 0].unsqueeze(2)
-dy_target = target[..., 1].unsqueeze(2)
-pen_target = target[..., 2].unsqueeze(2)
+        dx_target = target[..., 0].unsqueeze(2)
+        dy_target = target[..., 1].unsqueeze(2)
 
-print(dx_target)
-print(dy_target)
-print(pen_target)
+        z_x = (dx_target - mu_x) / sigma_x
+        z_y = (dy_target - mu_y) / sigma_y
+        rho_term = 1 - rho ** 2
+        
+        z_pow = z_x ** 2 + z_y ** 2 - 2 * rho * z_x * z_y
+        exp_term = -z_pow / (2 * rho_term)
+        
+        norm_const = 2 * np.pi * sigma_x * sigma_y * torch.sqrt(rho_term)
+        
+        probs = (torch.exp(exp_term) / norm_const) + 1e-6
+        
+        final_prob = torch.sum(pi * probs, dim = -1)
 
-do = torch.randn(2, 5, 1 + 6 * 20, requires_grad = True)
+        return -torch.log(final_prob + 1e-6).mean()
 
-print(do)
+# https://arxiv.org/pdf/1704.03477 Goat research paper
 
-eos = do[..., 0:1]
-params = do[..., 1:].view(do.size(0), do.size(1), 20, 6)
+# https://medium.com/the-ml-intuition/youve-been-using-negative-log-loss-here-s-what-it-actually-means-7753e476d346
 
-print(do[..., 1:].view(2, 5, 20, 6)[:, :, :, 1].shape, do[..., 1:].view(2, 5, 20, 6)[:, :, :, 1])
-print(do[..., 1:].view(2, 5, 20, 6)[:, :, :, 0])
-
-log_pi = F.log_softmax(params[..., 0], dim = -1)
-mu_x = params[..., 1]
-mu_y = params[..., 2]
-
-sigma_x = torch.exp(params[..., 3])
-sigma_y = torch.exp(params[..., 4])
-
-rho = torch.tanh(params[..., 5])
-
-z_x = (dx_target - mu_x) / sigma_x
-z_y = (dy_target - mu_y) / sigma_y
-
-# https://www.probabilitycourse.com/chapter5/5_3_2_bivariate_normal_dist.php
-z_term = z_x**2 + z_y**2 - 2 * rho * z_x * z_y
-
-log_norm_const = -torch.log(2 * np.pi * sigma_x * sigma_y * torch.sqrt(1 - rho ** 2))
-log_exp_term = -z_term / (2 * (1 - rho ** 2))
-log_prob_components = log_norm_const + log_exp_term
-log_prob = torch.logsumexp(log_pi + log_prob_components, dim = -1)
-
-print(-log_prob.mean())
+# https://github.com/dusenberrymw/mixture-density-networks/blob/master/mixture_density_networks.ipynb
 
 # https://deep-and-shallow.com/2021/03/20/mixture-density-networks-probabilistic-regression-for-uncertainty-estimation/
