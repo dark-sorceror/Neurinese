@@ -118,21 +118,19 @@ class HandwritingTrainer:
             lr = learning_rate
         )
         
-        self.criterion = ReconstructionLoss()
+        self.criterion = ReconstructionLoss(num_mixtures = 20)
         
         self.history = {
             "train_loss": [],
             "val_loss": []
         }
     
-    def train(self, loader: DataLoader):
+    def train(self, loader: DataLoader, kl_w: float):
         self.model.train()
         
         total_loss = 0.0
         
         for i, seq in enumerate(loader):
-            kl_w = min(0.05, 0.05 * (i / 2000))
-            
             seq = seq.to(self.device)
             
             pred, mean_dist, log_var = self.model(seq)
@@ -142,6 +140,9 @@ class HandwritingTrainer:
             
             self.optimizer.zero_grad()
             loss.backward()
+            
+            torch.nn.utils.clip_grad_norm_(parameters = self.model.parameters(), max_norm = 1.0)
+            
             self.optimizer.step()
             
             total_loss += loss.item() * seq.size(0)
@@ -227,9 +228,9 @@ class HandwritingTrainer:
         best_val_loss = float("inf")
         
         for epoch in range(epochs):
-            kl_w = min(0.05, 0.05 * epoch / 200)
+            kl_w = min(0.05, 0.05 * epoch / 20)
             
-            train_loss = self.train(train_loader)
+            train_loss = self.train(train_loader, kl_w)
             val_loss = self.validate(val_loader)
             
             self.history["train_loss"].append(train_loss)

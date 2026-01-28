@@ -290,12 +290,10 @@ class DrawingApp:
         generator = Handwrite(model = model, device = device)
 
         samples = np.load("./data/strokes.npy", allow_pickle = True)
-        single_raw = samples[0].astype(np.float32)
-        single_rel = to_relative(normalize(single_raw))
+        single_sample = [to_relative(normalize(samples[0].astype(np.float32)))]
 
-        debug_samples = [single_rel] 
-        dataset_obj = StrokeDataset(debug_samples) 
-        sample_tensor = dataset_obj[0] .unsqueeze(0).to(device)
+        dataset = StrokeDataset(single_sample) 
+        sample_tensor = dataset[0] .unsqueeze(0).to(device)
 
         model.eval()
         mean_dist, log_var = model.encoder(sample_tensor)
@@ -373,13 +371,11 @@ class DrawingApp:
         generator = Handwrite(model = model, device = device)
 
         samples = np.load("./data/strokes.npy", allow_pickle = True)
-        single_raw = samples[0].astype(np.float32)
-        single_rel = to_relative(normalize(single_raw))
+        single_sample = [to_relative(normalize(samples[0].astype(np.float32)))]
 
-        debug_samples = [single_rel] 
-        dataset_obj = StrokeDataset(debug_samples) 
+        dataset = StrokeDataset(single_sample) 
 
-        sample_tensor = dataset_obj[0].unsqueeze(0).to(device)
+        sample_tensor = dataset[0].unsqueeze(0).to(device)
 
         model.eval()
         

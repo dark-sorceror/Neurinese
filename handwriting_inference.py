@@ -1,7 +1,7 @@
 import torch
 import numpy as np
 import torch.nn as nn
-import torch.functional as F
+import torch.nn.functional as F
 
 from utils import plot_strokes
 from preprocess import normalize, to_relative
@@ -131,6 +131,7 @@ if __name__ == "__main__":
         z = mean_dist
 
     gen_strokes = generator.generate(z = z)
+    plot_strokes(gen_strokes, multiple = False)
 
     # recon = generator.reconstruct(sample_tensor)
     # print(recon)

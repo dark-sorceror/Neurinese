@@ -153,10 +153,8 @@ class ReconstructionLoss(nn.Module):
         
         coor_loss = self.mdn_loss(pred = pred, target = target)
         
-        print(coor_loss)
-        
         pen_loss = F.binary_cross_entropy_with_logits(
-            input = pred[..., 2],
+            input = pred[..., 0],
             target = target[..., 2],
             pos_weight = torch.tensor(
                 [5.0], 
