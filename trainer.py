@@ -125,16 +125,31 @@ class HandwritingTrainer:
             "val_loss": []
         }
     
+    def reparameterize(self, mu, log_var):
+        std = torch.exp(0.5 * log_var)
+        eps = torch.randn_like(std)
+        
+        return mu + eps * std
+    
     def train(self, loader: DataLoader, kl_w: float):
         self.model.train()
-        
         total_loss = 0.0
+
+        sos_token = torch.tensor([0, 0, 1], dtype=torch.float32, device=self.device)
         
         for i, seq in enumerate(loader):
             seq = seq.to(self.device)
             
-            pred, mean_dist, log_var = self.model(seq)
-            loss, kl = self.criterion(pred, seq, mean_dist, log_var)
+            # Decoder Input: [SOS, A, B]
+            batch_size = seq.size(0)
+            sos_batch = sos_token.view(1, 1, 3).repeat(batch_size, 1, 1)
+            
+            # Input to Decoder = [SOS] + [Seq excluding last step], then full seq, the history
+            decoder_input = torch.cat([sos_batch, seq[:, :-1, :]], dim=1)
+            mean, log_var = self.model.encoder(seq)
+            z = self.reparameterize(mean, log_var)
+            pred, _ = self.model.decoder(z, decoder_input)
+            loss, kl = self.criterion(pred, seq, mean, log_var)
             
             loss = loss + kl * kl_w
             
@@ -149,20 +164,59 @@ class HandwritingTrainer:
         
         return total_loss / len(loader.dataset)
     
+    def sample_step(self, prediction, num_mixtures = 20, temperature = 0.1):
+        pred = prediction.squeeze()
+        
+        pen_logit = pred[0]
+        pi_logits = pred[1 : 1 + num_mixtures]
+        gaussian_params = pred[1 + num_mixtures :].view(num_mixtures, 5)
+        
+        pen_prob = torch.sigmoid(pen_logit)
+        pen_state = 1.0 if torch.rand(1).item() < pen_prob else 0.0
+        
+        pi_logits = pi_logits / temperature
+        pi = torch.nn.functional.softmax(pi_logits, dim = 0)
+        
+        categorical = torch.distributions.Categorical(pi)
+        k = categorical.sample().item()
+        
+        params = gaussian_params[k]
+        mu_x, mu_y, sigma_x_log, sigma_y_log, rho_log = params
+        
+        sigma_x = torch.exp(sigma_x_log) * np.sqrt(temperature)
+        sigma_y = torch.exp(sigma_y_log) * np.sqrt(temperature)
+        rho = torch.tanh(rho_log)
+        
+        mean = torch.tensor([mu_x, mu_y])
+        cov_xy = rho * sigma_x * sigma_y
+        covariance = torch.tensor([[sigma_x**2, cov_xy], [cov_xy, sigma_y**2]])
+        
+        mvn = torch.distributions.MultivariateNormal(mean, covariance)
+        sample_coords = mvn.sample()
+        
+        return sample_coords[0].item(), sample_coords[1].item(), pen_state
+    
     @torch.no_grad()
     def validate(self, loader: DataLoader):
         self.model.eval()
-        
         total_loss = 0.0
+        
+        sos_token = torch.tensor([0, 0, 1], dtype = torch.float32, device = self.device)
         
         for i, seq in enumerate(loader):
             kl_w = min(0.05, 0.05 * (i / 2000))
-            
             seq = seq.to(self.device)
             
-            pred, mean_dist, log_var = self.model(seq)
-            loss, kl = self.criterion(pred, seq, mean_dist, log_var)
+            batch_size = seq.size(0)
+            sos_batch = sos_token.view(1, 1, 3).repeat(batch_size, 1, 1)
+            decoder_input = torch.cat([sos_batch, seq[:, :-1, :]], dim = 1)
             
+            mean, log_var = self.model.encoder(seq)
+            z = mean 
+            
+            pred, _ = self.model.decoder(z, decoder_input)
+            
+            loss, kl = self.criterion(pred, seq, mean, log_var)
             loss = loss + kl * kl_w
             
             total_loss += loss.item() * seq.size(0)
@@ -174,22 +228,38 @@ class HandwritingTrainer:
         self.model.eval()
         
         seq = seq.unsqueeze(0).to(self.device)
-        mean_dist, log_var = self.model.encoder(seq)
-        z = mean_dist
         
-        out, _ = self.model.decoder(z, seq)
+        mean, _ = self.model.encoder(seq)
+        z = mean 
         
-        return out.squeeze(0).cpu().numpy()
+        sos_token = torch.tensor([0, 0, 1], dtype = torch.float32, device = self.device)
+        batch_size = seq.size(0)
+        sos_batch = sos_token.view(1, 1, 3).repeat(batch_size, 1, 1)
+        decoder_input = torch.cat([sos_batch, seq[:, :-1, :]], dim = 1)
+        
+        out, _ = self.model.decoder(z, decoder_input)
+        # out Shape: [1, seq_len, 121]
+        
+        recon_seq = []
+        
+        for i in range(out.size(1)):
+            step_pred = out[:, i : i + 1, :] 
+            
+            dx, dy, pen = self.sample_step(step_pred, temperature = 0.1)
+            recon_seq.append([dx, dy, pen])
+            
+        return np.array(recon_seq)
     
     @torch.no_grad()
     def generate(self, seq: StrokeDataset, max_steps = 150):
         self.model.eval()
         
         seq = seq.unsqueeze(0).to(self.device)
-        mean_dist, _ = self.model.encoder(seq)
-        z = mean_dist
         
-        x = torch.zeros(1, 1, 3).to(self.device)
+        mean, _ = self.model.encoder(seq)
+        z = mean.to(self.device)
+        
+        x = torch.zeros(1, 1, 3, dtype = torch.float32, device = self.device)
         
         hidden = None
         out_seq = []
@@ -198,24 +268,26 @@ class HandwritingTrainer:
         for _ in range(max_steps):
             out, hidden = self.model.decoder(z, x, hidden)
             
-            step = out[:, -1]
-            dx, dy = step[:, 0], step[:, 1]
-            pen_logit = step[:, 2]
-            pen = torch.sigmoid(pen_logit)
+            dx, dy, pen = self.sample_step(out, temperature = 0.1)
             
-            out_seq.append([dx.item(), dy.item(), pen.item()])
+            out_seq.append([dx, dy, pen])
             
-            x = torch.tensor([[[dx, dy, pen]]]).to(self.device)
+            next_point = torch.tensor(
+                [[[dx, dy, pen]]], 
+                dtype = torch.float32, 
+                device = self.device
+            )
+            x = next_point
             
-            if pen < 0.5:
+            if pen == 0:
                 pen_up_count += 1
             else:
                 pen_up_count = 0
                 
-            if pen_up_count > 8:
+            if pen_up_count > 10:
                 break
         
-        return out_seq
+        return np.array(out_seq)
         
     def fit(
         self, 
@@ -229,7 +301,6 @@ class HandwritingTrainer:
         
         for epoch in range(epochs):
             kl_w = min(0.05, 0.05 * epoch / 20)
-            
             train_loss = self.train(train_loader, kl_w)
             val_loss = self.validate(val_loader)
             
@@ -239,15 +310,14 @@ class HandwritingTrainer:
             if val_loss < best_val_loss:
                 best_val_loss = val_loss
                 epochs_no_improve = 0
-                
                 torch.save(self.model.state_dict(), checkpoint_path)
                 
-                print(f"Epoch {epoch:3d}/{epochs}: Training Loss: {train_loss:.4f} KL: {kl_w:.4f} Validation Loss: {val_loss:.4f} (Saved best model)")
+                print(f"Epoch {epoch:3d}/{epochs}: Training Loss: {train_loss:.4f} Validation Loss: {val_loss:.4f} (Saved best model)")
             else:
                 epochs_no_improve += 1
                 
-                print(f"Epoch {epoch:3d}/{epochs}: Training Loss: {train_loss:.4f} KL: {kl_w:.4f} Validation Loss: {val_loss:.4f} (No improvement) x{epochs_no_improve}")
-                
+                print(f"Epoch {epoch:3d}/{epochs}: Training Loss: {train_loss:.4f} Validation Loss: {val_loss:.4f} (No improvement) x{epochs_no_improve}")
+            
             if epochs_no_improve >= patience:
                 self.model.load_state_dict(torch.load(checkpoint_path))
                 
@@ -267,11 +337,10 @@ if __name__ == "__main__":
     processed_samples = []
 
     for raw in raw_data:
-        seq_abs = raw.copy()
-        seq_abs = normalize(seq_abs)
-        seq = to_relative(seq_abs)
+        seq_rel = to_relative(raw) 
+        seq_final = normalize(seq_rel)
 
-        processed_samples.append(seq)
+        processed_samples.append(seq_final)
 
     # Overfit on a single sample - perfect memorization and learning
     single_sample = processed_samples[0]
