@@ -33,15 +33,16 @@ class StrokeEncoder(nn.Module):
             input_size = input_size,
             hidden_size = hidden_size,
             num_layers = num_layers,
-            batch_first = True
+            batch_first = True,
+            bidirectional = True
         )
         
         self.m_h = nn.Linear(
-            in_features = hidden_size, 
+            in_features = hidden_size * 2, 
             out_features = latent_size
         )
         self.lv_h = nn.Linear(
-            in_features = hidden_size, 
+            in_features = hidden_size * 2, 
             out_features = latent_size
         )
 
@@ -51,10 +52,13 @@ class StrokeEncoder(nn.Module):
         # Final hidden state
         _, (h_n, _) = self.model(stroke_seq)
         
-        h_n = h_n[-1]
+        h_forward = h_n[-2, :, :]
+        h_backward = h_n[-1, :, :]
+        
+        h = torch.cat([h_forward, h_backward], dim = 1)
 
-        mean_dist = self.m_h(h_n)
-        log_var = self.lv_h(h_n)
+        mean_dist = self.m_h(h)
+        log_var = self.lv_h(h)
 
         return mean_dist, log_var
 
@@ -77,7 +81,7 @@ class StrokeDecoder(nn.Module):
         super().__init__()
 
         self.model = nn.LSTM(
-            input_size = 64 + latent_size,
+            input_size = latent_size * 2,
             hidden_size = hidden_size,
             num_layers = num_layers,
             batch_first = True
@@ -90,6 +94,11 @@ class StrokeDecoder(nn.Module):
         
         self.z_to_hidden = nn.Linear(
             in_features = latent_size, 
+            out_features = hidden_size
+        )
+        
+        self.z_to_cell = nn.Linear(
+            in_features = latent_size,
             out_features = hidden_size
         )
         
@@ -116,8 +125,9 @@ class StrokeDecoder(nn.Module):
         dec_in = torch.cat([stroke_seq_emb, z_ext], dim = -1)
         
         if hidden_state is None:
+            # [h_0 ; c_0] = tanh(W_z * z + b_z)
             h_0 = torch.tanh(self.z_to_hidden(z))
-            c_0 = torch.zeros_like(h_0)
+            c_0 = torch.tanh(self.z_to_cell(z))
             
             hidden_state = (h_0.unsqueeze(0), c_0.unsqueeze(0))
         
