@@ -7,7 +7,7 @@ from PIL import Image, ImageDraw
 from tkinter import Canvas, Button
 
 from character_model import CharacterRecognizer
-from preprocess import preprocess_pil_image, to_relative, normalize
+from preprocess import preprocess_pil_image, to_relative, normalize, simplify_stroke
 from stroke_model import StrokeDataset, StrokeModel
 from handwriting_inference import Handwrite
 
@@ -173,12 +173,17 @@ class DrawingApp:
         seq = []
         
         for stroke in self.strokes:
-            for i, (x, y) in enumerate(stroke):
-                if i == 0:
-                    p = 1
-                else:
-                    p = 0
-                
+            raw_stroke = []
+            
+            for x, y in stroke:
+                raw_stroke.append([x, y])
+            
+            simple_stroke = simplify_stroke(raw_stroke, epsilon = 2.0)
+            
+            for i, (x, y) in enumerate(simple_stroke):
+                if i == 0: p = 1
+                else: p = 0
+                    
                 seq.append([x, y, p])
                 
         return np.array(seq, dtype = np.float32)

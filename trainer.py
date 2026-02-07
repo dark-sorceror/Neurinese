@@ -144,7 +144,7 @@ class HandwritingTrainer:
             batch_size = seq.size(0)
             sos_batch = sos_token.view(1, 1, 3).repeat(batch_size, 1, 1)
             
-            # Input to Decoder = [SOS] + [Seq excluding last step], then full seq, the history
+            # Input to Decoder = [SOS] + [Seq excluding last step], then full seq, then history
             decoder_input = torch.cat([sos_batch, seq[:, :-1, :]], dim=1)
             mean, log_var = self.model.encoder(seq)
             z = self.reparameterize(mean, log_var)
@@ -237,8 +237,8 @@ class HandwritingTrainer:
         sos_batch = sos_token.view(1, 1, 3).repeat(batch_size, 1, 1)
         decoder_input = torch.cat([sos_batch, seq[:, :-1, :]], dim = 1)
         
-        out, _ = self.model.decoder(z, decoder_input)
         # out Shape: [1, seq_len, 121]
+        out, _ = self.model.decoder(z, decoder_input)
         
         recon_seq = []
         
@@ -272,12 +272,11 @@ class HandwritingTrainer:
             
             out_seq.append([dx, dy, pen])
             
-            next_point = torch.tensor(
+            x = torch.tensor(
                 [[[dx, dy, pen]]], 
                 dtype = torch.float32, 
                 device = self.device
             )
-            x = next_point
             
             if pen == 0:
                 pen_up_count += 1
@@ -396,4 +395,5 @@ if __name__ == "__main__":
 
     # Generative (free hand) is buggy.
     # TODO: Experiment with masking to pad samples
+    # udpate: working! However model doesnt know when to end
     plot_strokes(gen, multiple = False)
