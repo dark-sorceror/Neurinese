@@ -1,8 +1,8 @@
 import torch
 import numpy as np
 import torch.nn as nn
-import torch.nn.functional as F
 
+from mdn import MDN
 from utils import plot_strokes
 from preprocess import normalize, to_relative
 from stroke_model import StrokeDataset, StrokeModel
@@ -16,65 +16,45 @@ class Handwrite:
         self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
         self.model = model.to(self.device)
         
-    def sample(self, pred: torch.Tensor):
-        # pred shape: (1, 1, output_size)
-        
-        mdn_params = pred[0, 0, 1:]
-        num_mixtures = 20
-        
-        pi_l = mdn_params[:num_mixtures]
-        
-        gaussian_params = mdn_params[num_mixtures:].view(num_mixtures, 5)
-        
-        mu_x = gaussian_params[:, 0]
-        mu_y = gaussian_params[:, 1]
-        sigma_x = torch.exp(gaussian_params[:, 2])
-        sigma_y = torch.exp(gaussian_params[:, 3])
-        rho = torch.tanh(gaussian_params[:, 4])
-        
-        temperature = 0.8 
-        pi = F.softmax(pi_l / temperature, dim=0)
-
-        k = torch.multinomial(pi, 1).item()
-
-        z_x = torch.randn(1).to(self.device).item()
-        z_y = torch.randn(1).to(self.device).item()
-        
-        chosen_mu_x = mu_x[k].item()
-        chosen_mu_y = mu_y[k].item()
-        chosen_sigma_x = sigma_x[k].item() * np.sqrt(temperature)
-        chosen_sigma_y = sigma_y[k].item() * np.sqrt(temperature)
-        chosen_rho = rho[k].item()
-
-        dx = chosen_mu_x + chosen_sigma_x * z_x
-        dy = chosen_mu_y + chosen_sigma_y * (chosen_rho * z_x + np.sqrt(1 - chosen_rho**2) * z_y)
-        
-        pen_logit = pred[0, 0, 0]
-        
-        pen_prob = torch.sigmoid(pen_logit)
-        pen_state = 1 if torch.rand(1).item() < pen_prob else 0
-        
-        return dx, dy, pen_state
-    
-        # https://arxiv.org/pdf/1704.03477 Goat research paper
+        self.mdn = MDN(num_mixtures = 20)
 
     @torch.no_grad()
     def reconstruct(self, seq: StrokeDataset):
         self.model.eval()
         
         seq = seq.unsqueeze(0).to(self.device)
-        mean_dist, log_var = self.model.encoder(seq)
-        z = mean_dist
         
-        out, _ = self.model.decoder(z, seq)
+        mean, _ = self.model.encoder(seq)
+        z = mean 
         
-        return out.squeeze(0).cpu().numpy()
+        sos_token = torch.tensor([0, 0, 1], dtype = torch.float32, device = self.device)
+        batch_size = seq.size(0)
+        sos_batch = sos_token.view(1, 1, 3).repeat(batch_size, 1, 1)
+        decoder_input = torch.cat([sos_batch, seq[:, :-1, :]], dim = 1)
+        
+        # out Shape: [1, seq_len, 121]
+        out, _ = self.model.decoder(z, decoder_input)
+        
+        recon_seq = []
+        
+        for i in range(out.size(1)):
+            step_pred = out[:, i : i + 1, :] 
+            
+            dx, dy, pen = self.mdn.sample_step(step_pred, temperature = 0.1)
+            recon_seq.append([dx, dy, pen])
+            
+        return np.array(recon_seq)
     
     @torch.no_grad()
-    def generate(self, z: StrokeDataset, max_steps = 150):
+    def generate(self, seq: StrokeDataset, max_steps = 20):
         self.model.eval()
         
-        x = torch.zeros(1, 1, 3).to(self.device)
+        seq = seq.unsqueeze(0).to(self.device)
+        
+        mean, _ = self.model.encoder(seq)
+        z = mean.to(self.device)
+        
+        x = torch.zeros(1, 1, 3, dtype = torch.float32, device = self.device)
         
         hidden = None
         out_seq = []
@@ -82,19 +62,23 @@ class Handwrite:
         
         for _ in range(max_steps):
             out, hidden = self.model.decoder(z, x, hidden)
-
-            dx, dy, pen = self.sample(out)
+            
+            dx, dy, pen = self.mdn.sample_step(out, temperature = 0.1)
             
             out_seq.append([dx, dy, pen])
             
-            x = torch.tensor([[[dx, dy, pen]]], dtype=torch.float32).to(self.device)
+            x = torch.tensor(
+                [[[dx, dy, pen]]], 
+                dtype = torch.float32, 
+                device = self.device
+            )
             
-            if pen == 1:
+            if pen == 0:
                 pen_up_count += 1
             else:
                 pen_up_count = 0
                 
-            if pen_up_count > 8:
+            if pen_up_count > 10:
                 break
         
         return np.array(out_seq)
@@ -118,23 +102,22 @@ if __name__ == "__main__":
     generator = Handwrite(model = model, device = device)
 
     samples = np.load("./data/strokes.npy", allow_pickle = True)
-    single_sample = [to_relative(normalize(samples[0].astype(np.float32)))]
 
+    raw_sample = samples[0].astype(np.float32)
+    relative_sample = to_relative(raw_sample)
+    single_sample = [normalize(relative_sample)]
     dataset_obj = StrokeDataset(single_sample) 
-
     sample_tensor = dataset_obj[0] 
-    sample_batch = sample_tensor.unsqueeze(0).to(device)
-
-    model.eval()
-    with torch.no_grad():
-        mean_dist, log_var = model.encoder(sample_batch)
-        z = mean_dist
-
-    gen_strokes = generator.generate(z = z)
-    plot_strokes(gen_strokes, multiple = False)
-
-    # recon = generator.reconstruct(sample_tensor)
-    # print(recon)
     
-    # plot_strokes(sample_tensor.cpu().numpy(), multiple = False)
-    # plot_strokes(recon, multiple = False)
+    recon = generator.reconstruct(sample_tensor)
+    gen = generator.generate(sample_tensor)
+
+    # Plotting the dataset itself
+    plot_strokes(sample_tensor.numpy(), multiple = False)
+
+    # Reconstruction inference method (using ground truth)
+    plot_strokes(recon, multiple = False)
+
+    # Generative (free hand) is buggy.
+    # TODO: Experiment with masking to pad samples
+    plot_strokes(gen, multiple = False)

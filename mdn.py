@@ -10,8 +10,8 @@ class MDN(nn.Module):
         self.num_mixtures = num_mixtures
         
     def forward(self, pred: torch.Tensor, target: torch.Tensor):
+        # 'pred' shape: (batch_size, seq_len, 1 + 6 * num_mixtures)
         # 'target' shape: (batch_size, seq_len, input_size = 3)
-        # 'do' shape: (batch_size, seq_len, 1 + 6 * num_mixtures)
             
         pi_logits = pred[..., 1:1 + self.num_mixtures] 
         
@@ -48,6 +48,40 @@ class MDN(nn.Module):
         final_prob = torch.sum(pi * probs, dim = -1)
 
         return -torch.log(final_prob + 1e-6).mean()
+    
+    def sample_step(self, pred: torch.Tensor, temperature: int = 0.1):
+        # 'pred' shape: (batch_size, seq_len, 1 + 6 * num_mixtures)
+        
+        pred = pred.squeeze()
+        
+        pen_logit = pred[0]
+        pi_logits = pred[1 : 1 + self.num_mixtures]
+        gaussian_params = pred[1 + self.num_mixtures :].view(self.num_mixtures, 5)
+        
+        pen_prob = torch.sigmoid(pen_logit)
+        pen_state = 1.0 if torch.rand(1).item() < pen_prob else 0.0
+        
+        pi_logits = pi_logits / temperature
+        pi = torch.nn.functional.softmax(pi_logits, dim = 0)
+        
+        categorical = torch.distributions.Categorical(pi)
+        k = categorical.sample().item()
+        
+        params = gaussian_params[k]
+        mu_x, mu_y, sigma_x_log, sigma_y_log, rho_log = params
+        
+        sigma_x = torch.exp(sigma_x_log) * np.sqrt(temperature)
+        sigma_y = torch.exp(sigma_y_log) * np.sqrt(temperature)
+        rho = torch.tanh(rho_log)
+        
+        mean = torch.tensor([mu_x, mu_y])
+        cov_xy = rho * sigma_x * sigma_y
+        covariance = torch.tensor([[sigma_x**2, cov_xy], [cov_xy, sigma_y**2]])
+        
+        mvn = torch.distributions.MultivariateNormal(mean, covariance)
+        sample_coords = mvn.sample()
+        
+        return sample_coords[0].item(), sample_coords[1].item(), pen_state
 
 # https://arxiv.org/pdf/1704.03477 Goat research paper
 

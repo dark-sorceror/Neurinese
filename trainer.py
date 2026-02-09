@@ -5,9 +5,13 @@ import torch.optim as optim
 from torch.utils.data import DataLoader
 from torch.nn.utils.rnn import pad_sequence
 
+from mdn import MDN
 from utils import plot_strokes
 from preprocess import normalize, to_relative
 from stroke_model import StrokeModel, StrokeDataset, ReconstructionLoss
+
+DATA_PATH = "./data/strokes.npy"
+MODEL_PATH = "./models/handwriting_model.pth"
 
 class CharacterRecognizingTrainer:
     def __init__(
@@ -164,38 +168,6 @@ class HandwritingTrainer:
         
         return total_loss / len(loader.dataset)
     
-    def sample_step(self, prediction, num_mixtures = 20, temperature = 0.1):
-        pred = prediction.squeeze()
-        
-        pen_logit = pred[0]
-        pi_logits = pred[1 : 1 + num_mixtures]
-        gaussian_params = pred[1 + num_mixtures :].view(num_mixtures, 5)
-        
-        pen_prob = torch.sigmoid(pen_logit)
-        pen_state = 1.0 if torch.rand(1).item() < pen_prob else 0.0
-        
-        pi_logits = pi_logits / temperature
-        pi = torch.nn.functional.softmax(pi_logits, dim = 0)
-        
-        categorical = torch.distributions.Categorical(pi)
-        k = categorical.sample().item()
-        
-        params = gaussian_params[k]
-        mu_x, mu_y, sigma_x_log, sigma_y_log, rho_log = params
-        
-        sigma_x = torch.exp(sigma_x_log) * np.sqrt(temperature)
-        sigma_y = torch.exp(sigma_y_log) * np.sqrt(temperature)
-        rho = torch.tanh(rho_log)
-        
-        mean = torch.tensor([mu_x, mu_y])
-        cov_xy = rho * sigma_x * sigma_y
-        covariance = torch.tensor([[sigma_x**2, cov_xy], [cov_xy, sigma_y**2]])
-        
-        mvn = torch.distributions.MultivariateNormal(mean, covariance)
-        sample_coords = mvn.sample()
-        
-        return sample_coords[0].item(), sample_coords[1].item(), pen_state
-    
     @torch.no_grad()
     def validate(self, loader: DataLoader):
         self.model.eval()
@@ -223,71 +195,6 @@ class HandwritingTrainer:
         
         return total_loss / len(loader.dataset)
     
-    @torch.no_grad()
-    def reconstruct(self, seq: StrokeDataset):
-        self.model.eval()
-        
-        seq = seq.unsqueeze(0).to(self.device)
-        
-        mean, _ = self.model.encoder(seq)
-        z = mean 
-        
-        sos_token = torch.tensor([0, 0, 1], dtype = torch.float32, device = self.device)
-        batch_size = seq.size(0)
-        sos_batch = sos_token.view(1, 1, 3).repeat(batch_size, 1, 1)
-        decoder_input = torch.cat([sos_batch, seq[:, :-1, :]], dim = 1)
-        
-        # out Shape: [1, seq_len, 121]
-        out, _ = self.model.decoder(z, decoder_input)
-        
-        recon_seq = []
-        
-        for i in range(out.size(1)):
-            step_pred = out[:, i : i + 1, :] 
-            
-            dx, dy, pen = self.sample_step(step_pred, temperature = 0.1)
-            recon_seq.append([dx, dy, pen])
-            
-        return np.array(recon_seq)
-    
-    @torch.no_grad()
-    def generate(self, seq: StrokeDataset, max_steps = 150):
-        self.model.eval()
-        
-        seq = seq.unsqueeze(0).to(self.device)
-        
-        mean, _ = self.model.encoder(seq)
-        z = mean.to(self.device)
-        
-        x = torch.zeros(1, 1, 3, dtype = torch.float32, device = self.device)
-        
-        hidden = None
-        out_seq = []
-        pen_up_count = 0
-        
-        for _ in range(max_steps):
-            out, hidden = self.model.decoder(z, x, hidden)
-            
-            dx, dy, pen = self.sample_step(out, temperature = 0.1)
-            
-            out_seq.append([dx, dy, pen])
-            
-            x = torch.tensor(
-                [[[dx, dy, pen]]], 
-                dtype = torch.float32, 
-                device = self.device
-            )
-            
-            if pen == 0:
-                pen_up_count += 1
-            else:
-                pen_up_count = 0
-                
-            if pen_up_count > 10:
-                break
-        
-        return np.array(out_seq)
-        
     def fit(
         self, 
         train_loader: DataLoader,
@@ -323,9 +230,6 @@ class HandwritingTrainer:
                 break
                 
         print(f"Training finished. Best Validation Loss: {best_val_loss:.4f}")
-
-DATA_PATH = "./data/strokes.npy"
-MODEL_PATH = "./models/handwriting_model.pth"
 
 if __name__ == "__main__":
     collate_fn = lambda batch: pad_sequence(batch, batch_first = True)
@@ -382,18 +286,3 @@ if __name__ == "__main__":
         patience = 10,
         checkpoint_path = MODEL_PATH
     )
-
-    sample = train_ds[0]
-    recon = trainer.reconstruct(sample)
-    gen = trainer.generate(sample)
-
-    # Plotting the dataset itself
-    plot_strokes(sample.numpy(), multiple = False)
-
-    # Reconstruction inference method (using ground truth)
-    plot_strokes(recon, multiple = False)
-
-    # Generative (free hand) is buggy.
-    # TODO: Experiment with masking to pad samples
-    # udpate: working! However model doesnt know when to end
-    plot_strokes(gen, multiple = False)
