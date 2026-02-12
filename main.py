@@ -176,17 +176,12 @@ class DrawingApp:
             raw_stroke = []
             
             for x, y in stroke:
-                raw_stroke.append([x, y])
+                raw_stroke.append([float(x), float(y)])
             
-            simple_stroke = simplify_stroke(raw_stroke, epsilon = 2.0)
-            
-            for i, (x, y) in enumerate(simple_stroke):
-                if i == 0: p = 1
-                else: p = 0
-                    
-                seq.append([x, y, p])
+            if len(raw_stroke) > 0:
+                seq.append(raw_stroke)
                 
-        return np.array(seq, dtype = np.float32)
+        return seq
         
     def save(self):
         processed_input = self.preprocess_image()

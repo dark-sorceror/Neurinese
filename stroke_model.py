@@ -104,7 +104,7 @@ class StrokeDecoder(nn.Module):
         
         self.output = nn.Linear(
             in_features = hidden_size, 
-            out_features = 1 + num_mixtures * 6
+            out_features = 3 + num_mixtures * 6
         )
         
     def forward(
@@ -160,27 +160,26 @@ class ReconstructionLoss(nn.Module):
         mean_dist: torch.Tensor, 
         log_var: torch.Tensor
     ):
+        pen_logits = pred[..., :3]
+        mdn_params = pred[..., 3:]
         
-        coor_loss = self.mdn_loss(pred = pred, target = target)
+        coor_loss = self.mdn_loss(mdn_params, target)
         
-        pen_loss = F.binary_cross_entropy_with_logits(
-            input = pred[..., 0],
-            target = target[..., 2],
-            pos_weight = torch.tensor(
-                [5.0], 
-                device = pred.device
-            )
+        pen_target = target[..., 2:5]
+        pen_target_idx = torch.argmax(pen_target, dim =- 1)
+        pen_loss = F.cross_entropy(
+            input = pen_logits.view(-1, 3), 
+            target = pen_target_idx.view(-1)
         )
         
-        kl_loss = self.kl_loss(log_var, mean_dist)
-        kl_loss = kl_loss / pred.size(0)
+        kl_loss = self.kl_loss(log_var, mean_dist) / pred.size(0)
         
         return coor_loss + pen_loss, kl_loss
     
 class StrokeModel(nn.Module):
     def __init__(
         self, 
-        input_size: int = 3, 
+        input_size: int = 5, 
         hidden_size: int = 256, 
         latent_size: int = 64, 
         num_layers: int = 1
@@ -207,7 +206,12 @@ class StrokeModel(nn.Module):
         
         # Teacher forcing by shifting inputs (0, ..., i - 1)
         batch_size = stroke_seq.size(0)
-        sos = torch.zeros(batch_size, 1, 3, device = stroke_seq.device)
+        sos = torch.tensor(
+            [0, 0, 1, 0, 0], 
+            dtype = torch.float32, 
+            device = stroke_seq.device
+        )
+        sos = sos.view(1, 1, 5).repeat(batch_size, 1, 1)
         
         dec_in = torch.cat([sos, stroke_seq[:, :-1, :]], dim = 1)
         out, _ = self.decoder(z, dec_in)

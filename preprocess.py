@@ -25,7 +25,7 @@ def preprocess_pil_image(pil_img: Image):
     
     return np.expand_dims(img, axis = 0)
 
-def simplify_stroke(stroke, epsilon = 2.0):
+def simplify_stroke(stroke: list, epsilon: float = 2.0):
     # Ramer-Douglas-Peucker algorithm
     # Reducing the number of points while preserving the shape
 
@@ -60,32 +60,45 @@ def simplify_stroke(stroke, epsilon = 2.0):
         return rec_results1[:-1] + rec_results2
     else:
         return [stroke[0], stroke[end]]
-
-def to_relative(seq: np.array):
-    out = []
     
-    for i in range(1, len(seq)):
-        x0, y0, p0 = seq[i - 1]
-        x1, y1, p1 = seq[i]
-        dx, dy = x1 - x0, y1 - y0
-        out.append([dx, dy, p1])
+def to_relative(strokes: list, epsilon: float = 2.0):
+    seq = []
+    
+    for i, stroke in enumerate(strokes):
+        simplified = simplify_stroke(stroke, epsilon)
         
-    return np.array(out, dtype=np.float32)
+        for j in range(len(simplified) - 1):
+            x0, y0 = simplified[j]
+            x1, y1 = simplified[j+1]
+            dx, dy = x1 - x0, y1 - y0
+            
+            seq.append([dx, dy, 1, 0, 0])
+            
+        if i < len(strokes) - 1:
+            last_x, last_y = simplified[-1]
+            next_stroke = simplify_stroke(strokes[i+1], epsilon)
+            next_x, next_y = next_stroke[0]
+            dx, dy = next_x - last_x, next_y - last_y
+            
+            seq.append([dx, dy, 0, 1, 0])
+    
+    seq.append([0, 0, 0, 0, 1])
+    
+    return np.array(seq, dtype = np.float32)
 
 def normalize(seq: np.array):
     # Ignore massive movements
     # Means are already relatively small from small movement
     # seq[:, :2] -= seq[:, :2].mean(axis = 0, keepdims = True)
 
-    moves = np.linalg.norm(seq[:, :2], axis=1)
+    # Only use pen down moves
+    moves = seq[seq[:, 2] == 1]
     
-    drawing_moves = seq[moves < 50.0] 
-    
-    if len(drawing_moves) > 0:
-        scale = drawing_moves[:, :2].std() + 1e-6
+    if len(moves) > 0:
+        scale = moves[:, :2].std() + 1e-6
     else:
         scale = seq[:, :2].std() + 1e-6
-    
+        
     seq[:, :2] /= scale
     
     return seq

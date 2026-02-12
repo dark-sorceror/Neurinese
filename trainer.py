@@ -139,17 +139,21 @@ class HandwritingTrainer:
         self.model.train()
         total_loss = 0.0
 
-        sos_token = torch.tensor([0, 0, 1], dtype=torch.float32, device=self.device)
+        sos = torch.tensor(
+            [0, 0, 1, 0, 0], 
+            dtype = torch.float32, 
+            device = self.device
+        )
         
         for i, seq in enumerate(loader):
             seq = seq.to(self.device)
             
             # Decoder Input: [SOS, A, B]
             batch_size = seq.size(0)
-            sos_batch = sos_token.view(1, 1, 3).repeat(batch_size, 1, 1)
+            sos = sos.view(1, 1, 5).repeat(batch_size, 1, 1)
             
             # Input to Decoder = [SOS] + [Seq excluding last step], then full seq, then history
-            decoder_input = torch.cat([sos_batch, seq[:, :-1, :]], dim=1)
+            decoder_input = torch.cat([sos, seq[:, :-1, :]], dim=1)
             mean, log_var = self.model.encoder(seq)
             z = self.reparameterize(mean, log_var)
             pred, _ = self.model.decoder(z, decoder_input)
@@ -173,15 +177,19 @@ class HandwritingTrainer:
         self.model.eval()
         total_loss = 0.0
         
-        sos_token = torch.tensor([0, 0, 1], dtype = torch.float32, device = self.device)
+        sos = torch.tensor(
+            [0, 0, 1, 0, 0], 
+            dtype = torch.float32, 
+            device = self.device
+        )
         
         for i, seq in enumerate(loader):
             kl_w = min(0.05, 0.05 * (i / 2000))
             seq = seq.to(self.device)
             
             batch_size = seq.size(0)
-            sos_batch = sos_token.view(1, 1, 3).repeat(batch_size, 1, 1)
-            decoder_input = torch.cat([sos_batch, seq[:, :-1, :]], dim = 1)
+            sos = sos.view(1, 1, 5).repeat(batch_size, 1, 1)
+            decoder_input = torch.cat([sos, seq[:, :-1, :]], dim = 1)
             
             mean, log_var = self.model.encoder(seq)
             z = mean 
@@ -235,11 +243,10 @@ if __name__ == "__main__":
     collate_fn = lambda batch: pad_sequence(batch, batch_first = True)
 
     samples = np.load(DATA_PATH, allow_pickle = True)
-    raw_data = [seq.astype(np.float32) for seq in samples]
 
     processed_samples = []
 
-    for raw in raw_data:
+    for raw in samples:
         seq_rel = to_relative(raw) 
         seq_final = normalize(seq_rel)
 
