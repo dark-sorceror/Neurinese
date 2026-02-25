@@ -69,14 +69,14 @@ def to_relative(strokes: list, epsilon: float = 2.0):
         
         for j in range(len(simplified) - 1):
             x0, y0 = simplified[j]
-            x1, y1 = simplified[j+1]
+            x1, y1 = simplified[j + 1]
             dx, dy = x1 - x0, y1 - y0
             
             seq.append([dx, dy, 1, 0, 0])
             
         if i < len(strokes) - 1:
             last_x, last_y = simplified[-1]
-            next_stroke = simplify_stroke(strokes[i+1], epsilon)
+            next_stroke = simplify_stroke(strokes[i + 1], epsilon)
             next_x, next_y = next_stroke[0]
             dx, dy = next_x - last_x, next_y - last_y
             

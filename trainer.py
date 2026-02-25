@@ -145,18 +145,23 @@ class HandwritingTrainer:
             device = self.device
         )
         
-        for i, seq in enumerate(loader):
+        for i, (seq, char_id) in enumerate(loader):
             seq = seq.to(self.device)
+            char_id = char_id.to(self.device)
             
             # Decoder Input: [SOS, A, B]
+            decoder_input_seq = seq[:, :-1, :].clone()
+            mask = torch.rand_like(decoder_input_seq[:, :, 0]) < 0.20
+            decoder_input_seq[mask] = 0.0
+            
             batch_size = seq.size(0)
             sos = sos.view(1, 1, 5).repeat(batch_size, 1, 1)
             
             # Input to Decoder = [SOS] + [Seq excluding last step], then full seq, then history
-            decoder_input = torch.cat([sos, seq[:, :-1, :]], dim=1)
-            mean, log_var = self.model.encoder(seq)
+            decoder_input = torch.cat([sos, decoder_input_seq], dim = 1)
+            mean, log_var = self.model.encoder(seq, char_id)
             z = self.reparameterize(mean, log_var)
-            pred, _ = self.model.decoder(z, decoder_input)
+            pred, _ = self.model.decoder(z, decoder_input, char_id)
             loss, kl = self.criterion(pred, seq, mean, log_var)
             
             loss = loss + kl * kl_w
@@ -183,18 +188,19 @@ class HandwritingTrainer:
             device = self.device
         )
         
-        for i, seq in enumerate(loader):
+        for i, (seq, char_id) in enumerate(loader):
             kl_w = min(0.05, 0.05 * (i / 2000))
             seq = seq.to(self.device)
+            char_id = char_id.to(self.device)
             
             batch_size = seq.size(0)
             sos = sos.view(1, 1, 5).repeat(batch_size, 1, 1)
             decoder_input = torch.cat([sos, seq[:, :-1, :]], dim = 1)
             
-            mean, log_var = self.model.encoder(seq)
+            mean, log_var = self.model.encoder(seq, char_id)
             z = mean 
             
-            pred, _ = self.model.decoder(z, decoder_input)
+            pred, _ = self.model.decoder(z, decoder_input, char_id)
             
             loss, kl = self.criterion(pred, seq, mean, log_var)
             loss = loss + kl * kl_w
@@ -239,24 +245,26 @@ class HandwritingTrainer:
                 
         print(f"Training finished. Best Validation Loss: {best_val_loss:.4f}")
 
-if __name__ == "__main__":
-    collate_fn = lambda batch: pad_sequence(batch, batch_first = True)
+def collate_fn(batch):
+    seqs = [item[0] for item in batch]
+    char_ids = torch.stack([item[1] for item in batch])
+    
+    padded_seqs = pad_sequence(seqs, batch_first = True)
+    
+    return padded_seqs, char_ids
 
+if __name__ == "__main__":
     samples = np.load(DATA_PATH, allow_pickle = True)
 
     processed_samples = []
 
-    for raw in samples:
+    for raw, char_id in samples:
         seq_rel = to_relative(raw) 
         seq_final = normalize(seq_rel)
 
-        processed_samples.append(seq_final)
+        processed_samples.append((seq_final, char_id))
 
-    # Overfit on a single sample - perfect memorization and learning
-    single_sample = processed_samples[0]
-    debug_samples = [single_sample for _ in range(300)]
-
-    dataset = StrokeDataset(debug_samples)
+    dataset = StrokeDataset(processed_samples)
 
     train_size = int(0.9 * len(dataset))
     val_size = len(dataset) - train_size
@@ -277,10 +285,12 @@ if __name__ == "__main__":
     )
 
     model = StrokeModel(
-        input_size = len(single_sample[0]),
+        input_size = len(dataset[0][0][0]),
         hidden_size = 256,
         latent_size = 64,
-        num_layers = 1
+        num_layers = 1,
+        num_classes = 10,
+        class_emb_dim = 32
     )
     trainer = HandwritingTrainer(
         model = model, 

@@ -13,11 +13,12 @@ class StrokeDataset(Dataset):
         return len(self.data)
     
     def __getitem__(self, index):
-        seq = self.data[index]
+        seq, char_id = self.data[index]
         
         seq_tensor = torch.tensor(seq, dtype = torch.float32)
+        char_id_tensor = torch.tensor(char_id, dtype = torch.long)
         
-        return seq_tensor
+        return seq_tensor, char_id_tensor
 
 class StrokeEncoder(nn.Module):
     def __init__(
@@ -25,12 +26,16 @@ class StrokeEncoder(nn.Module):
         input_size: int = 3,
         hidden_size: int = 256, 
         latent_size: int = 64, 
-        num_layers: int = 1
+        num_layers: int = 1,
+        num_classes: int = 10,
+        class_emb_dim: int = 32
     ):
         super().__init__()
+        
+        self.char_embedding = nn.Embedding(num_classes, class_emb_dim)
 
         self.model = nn.LSTM(
-            input_size = input_size,
+            input_size = input_size + class_emb_dim,
             hidden_size = hidden_size,
             num_layers = num_layers,
             batch_first = True,
@@ -46,11 +51,20 @@ class StrokeEncoder(nn.Module):
             out_features = latent_size
         )
 
-    def forward(self, stroke_seq: torch.Tensor):
+    def forward(self, stroke_seq: torch.Tensor, char_id: torch.Tensor):
         # stroke_seq shape: (batch_size, seq_len, input_size = 3)
+        
+        seq_len = stroke_seq.size(1)
+        
+        emb = self.char_embedding(char_id).unsqueeze(1) 
+        
+        # expanded embedding shape: (batch_size, seq_len, class_emb_dim)
+        emb_expanded = emb.repeat(1, seq_len, 1) 
+        
+        rnn_input = torch.cat([stroke_seq, emb_expanded], dim = -1)
 
         # Final hidden state
-        _, (h_n, _) = self.model(stroke_seq)
+        _, (h_n, _) = self.model(rnn_input)
         
         h_forward = h_n[-2, :, :]
         h_backward = h_n[-1, :, :]
@@ -76,18 +90,25 @@ class StrokeDecoder(nn.Module):
         hidden_size: int = 256, 
         latent_size: int = 64,
         num_layers: int = 1,
-        num_mixtures: int = 20
+        num_mixtures: int = 20,
+        num_classes: int = 10,
+        class_emb_dim: int = 32
     ):
         super().__init__()
+        
+        self.char_embedding = nn.Embedding(
+            num_embeddings = num_classes, 
+            embedding_dim = class_emb_dim
+        )
 
         self.model = nn.LSTM(
-            input_size = latent_size * 2,
+            input_size = latent_size * 2 + class_emb_dim,
             hidden_size = hidden_size,
             num_layers = num_layers,
             batch_first = True
         )
         
-        self.embedding = nn.Linear(
+        self.stroke_embedding = nn.Linear(
             in_features = input_size,
             out_features = latent_size
         )
@@ -110,7 +131,8 @@ class StrokeDecoder(nn.Module):
     def forward(
         self, 
         z: torch.Tensor,
-        stroke_seq: torch.Tensor, 
+        stroke_seq: torch.Tensor,
+        char_id: torch.Tensor,
         hidden_state: torch.Tensor = None
     ):
         # stroke_seq shape: (batch_size, seq_len, input_size = 3)
@@ -119,10 +141,13 @@ class StrokeDecoder(nn.Module):
         seq_len = stroke_seq.size(1)
         z_ext = z.unsqueeze(1).repeat(1, seq_len, 1)
         
-        # Teacher Forcing: Taking directly from the stroke dataset
-        stroke_seq_emb = F.relu(self.embedding(stroke_seq))
+        emb = self.char_embedding(char_id).unsqueeze(1)
+        emb_ext = emb.repeat(1, seq_len, 1)
         
-        dec_in = torch.cat([stroke_seq_emb, z_ext], dim = -1)
+        # Teacher Forcing: Taking directly from the stroke dataset
+        stroke_seq_emb = F.relu(self.stroke_embedding(stroke_seq))
+        
+        dec_in = torch.cat([stroke_seq_emb, emb_ext, z_ext], dim = -1)
         
         if hidden_state is None:
             # [h_0 ; c_0] = tanh(W_z * z + b_z)
@@ -182,7 +207,9 @@ class StrokeModel(nn.Module):
         input_size: int = 5, 
         hidden_size: int = 256, 
         latent_size: int = 64, 
-        num_layers: int = 1
+        num_layers: int = 1,
+        num_classes: int = 10,
+        class_emb_dim: int = 32
     ):
         super().__init__()
         
@@ -190,18 +217,23 @@ class StrokeModel(nn.Module):
             input_size = input_size,
             hidden_size = hidden_size,
             latent_size = latent_size,
-            num_layers = num_layers
+            num_layers = num_layers,
+            num_classes = num_classes,
+            class_emb_dim = class_emb_dim
         )
         
         self.decoder = StrokeDecoder(
             input_size = input_size,
             hidden_size = hidden_size,
             latent_size = latent_size,
-            num_layers = num_layers
+            num_layers = num_layers,
+            num_mixtures = 20,
+            num_classes = num_classes,
+            class_emb_dim = class_emb_dim
         )
     
-    def forward(self, stroke_seq: torch.Tensor):
-        mean_dist, log_var = self.encoder(stroke_seq)
+    def forward(self, stroke_seq: torch.Tensor, char_id: torch.Tensor):
+        mean_dist, log_var = self.encoder(stroke_seq, char_id)
         z = self.encoder.reparameterize(mean_dist, log_var)
         
         # Teacher forcing by shifting inputs (0, ..., i - 1)
@@ -214,6 +246,6 @@ class StrokeModel(nn.Module):
         sos = sos.view(1, 1, 5).repeat(batch_size, 1, 1)
         
         dec_in = torch.cat([sos, stroke_seq[:, :-1, :]], dim = 1)
-        out, _ = self.decoder(z, dec_in)
+        out, _ = self.decoder(z, dec_in, char_id)
         
         return out, mean_dist, log_var

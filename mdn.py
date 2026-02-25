@@ -21,7 +21,7 @@ class MDN(nn.Module):
         sigma_y_logits = gaussian_params[..., 3]
         rho_logits = gaussian_params[..., 4]
 
-        pi = F.softmax(pi_logits, dim=-1)
+        pi = F.softmax(pi_logits, dim = -1)
         sigma_x = torch.exp(sigma_x_logits) + 1e-6
         sigma_y = torch.exp(sigma_y_logits) + 1e-6
         rho = torch.tanh(rho_logits)
@@ -57,7 +57,7 @@ class MDN(nn.Module):
         
         mdn_params = pred[3:]
         pi_logits = mdn_params[: self.num_mixtures] / temperature
-        pi = torch.nn.functional.softmax(pi_logits, dim=0)
+        pi = torch.nn.functional.softmax(pi_logits, dim = 0)
         k = torch.distributions.Categorical(pi).sample().item()
         
         gaussian_params = mdn_params[self.num_mixtures:].view(self.num_mixtures, 5)

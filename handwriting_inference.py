@@ -19,12 +19,13 @@ class Handwrite:
         self.mdn = MDN(num_mixtures = 20)
 
     @torch.no_grad()
-    def reconstruct(self, seq: StrokeDataset):
+    def reconstruct(self, seq: StrokeDataset, char_id: torch.Tensor):
         self.model.eval()
         
         seq = seq.unsqueeze(0).to(self.device)
+        char_id = char_id.unsqueeze(0).to(self.device)
         
-        mean, _ = self.model.encoder(seq)
+        mean, _ = self.model.encoder(seq, char_id)
         z = mean 
         
         sos = torch.tensor(
@@ -37,7 +38,7 @@ class Handwrite:
         decoder_input = torch.cat([sos, seq[:, :-1, :]], dim = 1)
         
         # out Shape: [1, seq_len, 121]
-        out, _ = self.model.decoder(z, decoder_input)
+        out, _ = self.model.decoder(z, decoder_input, char_id)
         
         recon_seq = []
         
@@ -51,10 +52,13 @@ class Handwrite:
         return np.array(recon_seq)
     
     @torch.no_grad()
-    def generate(self, seq: StrokeDataset, max_steps=150):
+    def generate(self, seq: StrokeDataset, char_id: torch.Tensor, max_steps = 150):
         self.model.eval()
+        
         seq = seq.unsqueeze(0).to(self.device)
-        mean, _ = self.model.encoder(seq)
+        char_id = char_id.unsqueeze(0).to(self.device)
+        
+        mean, _ = self.model.encoder(seq, char_id)
         z = mean.to(self.device)
         
         x = torch.tensor(
@@ -66,7 +70,7 @@ class Handwrite:
         out_seq = []
         
         for _ in range(max_steps):
-            out, hidden = self.model.decoder(z, x, hidden)
+            out, hidden = self.model.decoder(z, x, char_id, hidden)
             dx, dy, pen = self.mdn.sample_step(out, temperature = 0.6)
             
             p1, p2, p3 = pen
@@ -79,6 +83,52 @@ class Handwrite:
             x = torch.tensor(
                 [[[dx, dy, p1, p2, p3]]], 
                 dtype = torch.float32,
+                device = self.device
+            )
+            
+        return np.array(out_seq)
+    
+    @torch.no_grad()
+    def autocomplete(
+        self, 
+        seq: StrokeDataset, 
+        char_id: torch.Tensor, 
+        next_char_id: int, 
+        max_steps: int = 150
+    ):
+        self.model.eval()
+        
+        seq = seq.unsqueeze(0).to(self.device)
+        char_id = char_id.unsqueeze(0).to(self.device)
+        
+        next_char_id = torch.tensor(
+            data = [next_char_id], 
+            device = self.device
+        )
+        
+        mean, _ = self.model.encoder(seq, char_id)
+        z_style = mean
+        
+        x = torch.tensor(
+            data = [[[0, 0, 1, 0, 0]]],
+            dtype = torch.float32, 
+            device = self.device)
+        hidden = None
+        out_seq = []
+        
+        for _ in range(max_steps):
+            out, hidden = self.model.decoder(z_style, x, next_char_id, hidden)
+            dx, dy, pen = self.mdn.sample_step(out, temperature = 0.6)
+            
+            p1, p2, p3 = pen
+            out_seq.append([dx, dy, p1, p2, p3])
+            
+            if p3 == 1:
+                break
+                
+            x = torch.tensor(
+                data = [[[dx, dy, p1, p2, p3]]], 
+                dtype = torch.float32, 
                 device = self.device
             )
             
@@ -104,15 +154,16 @@ if __name__ == "__main__":
 
     samples = np.load("./data/strokes.npy", allow_pickle = True)
 
-    raw_sample = samples[0]
+    raw_sample, char_id = samples[0]
     relative_sample = to_relative(raw_sample)
-    single_sample = [normalize(relative_sample)]
+    single_sample = [(normalize(relative_sample), char_id)]
     
-    dataset_obj = StrokeDataset(single_sample) 
-    sample_tensor = dataset_obj[0]
+    dataset = StrokeDataset(single_sample) 
+    sample_tensor, char_id_tensor = dataset[0]
     
-    recon = generator.reconstruct(sample_tensor)
-    gen = generator.generate(sample_tensor)
+    recon = generator.reconstruct(sample_tensor, char_id_tensor)
+    gen = generator.generate(sample_tensor, char_id_tensor)
+    ac = generator.autocomplete(sample_tensor, char_id_tensor, 1)
 
     # Plotting the dataset itself
     plot_strokes(sample_tensor.numpy(), multiple = False)
@@ -123,3 +174,7 @@ if __name__ == "__main__":
     # Generative (free hand) is buggy.
     # TODO: Experiment with masking to pad samples
     plot_strokes(gen, multiple = False)
+    
+    # Generative (free hand) is buggy.
+    # TODO: Experiment with masking to pad samples
+    plot_strokes(ac, multiple = False)

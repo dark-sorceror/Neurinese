@@ -90,8 +90,8 @@ class DrawingApp:
         )
         self.generate_btn.pack(side = tk.LEFT, padx = 5)
         
-        self.CHARACTER_TO_COLLECT = "你"
-        self.INDEX_OF_CHARACTER = 0
+        self.CHARACTER_TO_COLLECT = "不"
+        self.INDEX_OF_CHARACTER = 1
         self.INDEX_TO_CHAR = {
             0: "你",
             1: "不",
@@ -211,22 +211,23 @@ class DrawingApp:
         seq = self.preprocess_strokes()
         
         if len(seq) == 0: return
+        
+        dt = (seq, self.INDEX_OF_CHARACTER)
 
         if not STROKE_FILE_PATH.exists():
-            stroke_batch = [seq]
+            stroke_batch = [dt]
         else:
             strokes = np.load(STROKE_FILE_PATH, allow_pickle = True)
             stroke_batch = list(strokes)
             
             for _ in range(20):
-                stroke_batch.append(seq)
+                stroke_batch.append(dt)
 
         stroke_array = np.array(stroke_batch, dtype = object)
         np.save(STROKE_FILE_PATH, stroke_array)
     
         print(f"Saved vector stroke. Total samples: {len(stroke_batch)}")
         
-        # No conditional VAE yet; overfitting on a single sample
         """
         if self.INDEX_OF_CHARACTER == len(self.INDEX_TO_CHAR) - 1:
             self.INDEX_OF_CHARACTER = 0
@@ -243,9 +244,6 @@ class DrawingApp:
     
     @torch.no_grad()    
     def recognize_char(self):
-        if not self.model:
-            return
-        
         input_data = self.preprocess_image()
 
         input_tensor = torch.from_numpy(input_data).unsqueeze(0).to(self.device)
