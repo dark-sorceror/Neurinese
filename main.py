@@ -7,7 +7,7 @@ from PIL import Image, ImageDraw
 from tkinter import Canvas, Button
 
 from character_model import CharacterRecognizer
-from preprocess import preprocess_pil_image, to_relative, normalize, simplify_stroke
+from preprocess import preprocess_pil_image, to_relative, normalize
 from stroke_model import StrokeDataset, StrokeModel
 from handwriting_inference import Handwrite
 
@@ -16,12 +16,6 @@ MODEL_SIZE = 64
 
 CONFIDENCE_THRESHOLD = 0.70
 MARGIN_THRESHOLD = 0.35
-
-INDEX_TO_CHAR = {
-    0: "你",
-    1: "不",
-    2: "大"
-}
 
 IMAGE_FILE_PATH = Path("./data/image.npy")
 LABEL_FILE_PATH = Path("./data/label.npy")
@@ -83,19 +77,19 @@ class DrawingApp:
         )
         self.draw_btn.pack(side = tk.LEFT, padx = 5)
         
-        self.generate_btn = Button(
+        self.complete_btn = Button(
             master, 
-            text = "Generate", 
-            command = self.generate_char
+            text = "Use Style", 
+            command = self.infer_style
         )
-        self.generate_btn.pack(side = tk.LEFT, padx = 5)
+        self.complete_btn.pack(side = tk.LEFT, padx = 5)
         
-        self.CHARACTER_TO_COLLECT = "不"
-        self.INDEX_OF_CHARACTER = 1
+        self.CHARACTER_TO_COLLECT = "我"
+        self.INDEX_OF_CHARACTER = 2
         self.INDEX_TO_CHAR = {
             0: "你",
-            1: "不",
-            2: "大"
+            1: "大",
+            2: "我"
         }
         
         self.strokes = []
@@ -104,7 +98,7 @@ class DrawingApp:
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         
         if MODEL_PATH.exists():
-            self.model = CharacterRecognizer(num_classes = len(INDEX_TO_CHAR))
+            self.model = CharacterRecognizer(num_classes = len(self.INDEX_TO_CHAR))
             self.model.load_state_dict(torch.load(MODEL_PATH, map_location=self.device))
             self.model.to(self.device)
             self.model.eval()
@@ -187,60 +181,153 @@ class DrawingApp:
         processed_input = self.preprocess_image()
         
         if processed_input is None: return
+
+        raw_seq = self.preprocess_strokes()
         
-        image_batch = np.repeat(np.expand_dims(processed_input, axis = 0), 20, axis = 0)
-        label_batch = np.full(10, self.INDEX_OF_CHARACTER, dtype = np.int64)
+        if len(raw_seq) == 0: return
+
+        seq = to_relative(raw_seq).tolist()
+
+        new_images = [processed_input]
         
+        for _ in range(19):
+            scale = np.random.uniform(0.85, 1.15)
+            noise = np.random.normal(0, 5, size=processed_input.shape)
+            aug_img = np.clip(processed_input * scale + noise, 0, 1)
+            new_images.append(aug_img)
+
+        new_images = np.array(new_images)
+        new_labels = np.full(len(new_images), self.INDEX_OF_CHARACTER)
+
         if not IMAGE_FILE_PATH.exists():
-            np.save(IMAGE_FILE_PATH, image_batch)
-            np.save(LABEL_FILE_PATH, label_batch)
-            
-            print(f"Saved character drawing. Total samples: {image_batch.shape[0]}")
+            np.save(IMAGE_FILE_PATH, new_images)
+            np.save(LABEL_FILE_PATH, new_labels)
         else:
             images = np.load(IMAGE_FILE_PATH)
             labels = np.load(LABEL_FILE_PATH)
             
-            updated_image_batch = np.concatenate([images, image_batch], axis = 0)
-            updated_labels_batch = np.concatenate([labels, label_batch], axis = 0)
-            
-            np.save(IMAGE_FILE_PATH, updated_image_batch)
-            np.save(LABEL_FILE_PATH, updated_labels_batch)
-            
-            print(f"Saved character drawing. Total samples: {updated_image_batch.shape[0]}")
+            np.save(IMAGE_FILE_PATH, np.concatenate([images, new_images], axis = 0))
+            np.save(LABEL_FILE_PATH, np.concatenate([labels, new_labels], axis = 0))
 
-        seq = self.preprocess_strokes()
-        
-        if len(seq) == 0: return
-        
-        dt = (seq, self.INDEX_OF_CHARACTER)
+        def augment_stroke(seq: list):
+            scale = np.random.uniform(0.85, 1.15)
+            angle = np.random.uniform(-0.05, 0.05)
+            cos_a, sin_a = np.cos(angle), np.sin(angle)
+            aug = []
+            
+            for step in seq:
+                dx, dy = float(step[0]), float(step[1])
+                p1, p2, p3 = float(step[2]), float(step[3]), float(step[4])
+                new_dx = (cos_a * dx - sin_a * dy) * scale + np.random.normal(0, 0.03)
+                new_dy = (sin_a * dx + cos_a * dy) * scale + np.random.normal(0, 0.03)
+                aug.append([new_dx, new_dy, p1, p2, p3])
+                
+            return aug
 
-        if not STROKE_FILE_PATH.exists():
-            stroke_batch = [dt]
+        if STROKE_FILE_PATH.exists():
+            stroke_batch = list(np.load(STROKE_FILE_PATH, allow_pickle = True))
         else:
-            strokes = np.load(STROKE_FILE_PATH, allow_pickle = True)
-            stroke_batch = list(strokes)
-            
-            for _ in range(20):
-                stroke_batch.append(dt)
+            stroke_batch = []
 
-        stroke_array = np.array(stroke_batch, dtype = object)
-        np.save(STROKE_FILE_PATH, stroke_array)
-    
-        print(f"Saved vector stroke. Total samples: {len(stroke_batch)}")
+        stroke_batch.append((seq, self.INDEX_OF_CHARACTER))
         
-        """
-        if self.INDEX_OF_CHARACTER == len(self.INDEX_TO_CHAR) - 1:
-            self.INDEX_OF_CHARACTER = 0
-        else:
-            self.INDEX_OF_CHARACTER += 1
-        """
-            
-        self.CHARACTER_TO_COLLECT = self.INDEX_TO_CHAR.get(self.INDEX_OF_CHARACTER)
+        for _ in range(19):
+            stroke_batch.append((augment_stroke(seq), self.INDEX_OF_CHARACTER))
+
+        np.save(STROKE_FILE_PATH, np.array(stroke_batch, dtype = object))
         
-        print(f"Next character: {self.CHARACTER_TO_COLLECT}")
-        
+        print(f"Saved 1 + 19 augmented. Total samples: {len(stroke_batch)}")
+
         self.strokes.clear()
         self.clear_canvas()
+    
+    def animate(self, seq):
+        self.clear_canvas()
+
+        curr_x, curr_y = 0.0, 0.0
+        min_x, max_x, min_y, max_y = 0.0, 0.0, 0.0, 0.0
+
+        for step in seq:
+            dx, dy = step[0], step[1]
+            curr_x += dx * 50
+            curr_y += dy * 50
+            min_x, max_x = min(min_x, curr_x), max(max_x, curr_x)
+            min_y, max_y = min(min_y, curr_y), max(max_y, curr_y)
+
+        self.canvas.update_idletasks()
+        
+        canvas_w = self.canvas.winfo_width()
+        canvas_h = self.canvas.winfo_height()
+
+        start_x = (canvas_w - (max_x - min_x)) / 2 - min_x
+        start_y = (canvas_h - (max_y - min_y)) / 2 - min_y
+
+        def draw_step(index, curr_x, curr_y):
+            if index >= len(seq):
+                return
+
+            step = seq[index]
+            dx, dy = step[0], step[1]
+            p1 = step[2]
+
+            nx = curr_x + dx * 50
+            ny = curr_y + dy * 50
+
+            if p1 > 0.5:
+                self.canvas.create_line(
+                    curr_x,
+                    curr_y, 
+                    nx, 
+                    ny,
+                    fill = "white",
+                    width = 7.5,
+                    capstyle = tk.ROUND, 
+                    smooth = tk.TRUE
+                )
+
+            self.canvas.after(10, draw_step, index + 1, nx, ny)
+
+        draw_step(0, start_x, start_y)
+    
+    def infer_style(self):
+        seq = self.preprocess_strokes()
+        
+        if not seq: return
+
+        relative = to_relative(seq)
+        normalized = normalize(relative)
+        single_sample = [(normalized, 0)]
+
+        dataset = StrokeDataset(single_sample)
+        sample_tensor, char_id_tensor = dataset[0]
+
+        model = StrokeModel(
+            input_size = 5, 
+            hidden_size = 256, 
+            latent_size = 64,
+            num_layers = 1, 
+            num_classes = 10, 
+            class_emb_dim = 32
+        ).to(self.device)
+        model.load_state_dict(
+            torch.load("models/handwriting_model.pth", 
+                map_location = self.device
+            )
+        )
+
+        generator = Handwrite(model = model, device = self.device)
+
+        with torch.no_grad():
+            seq_t = sample_tensor.unsqueeze(0).to(self.device)
+            cid_t = char_id_tensor.unsqueeze(0).to(self.device)
+            mu, _ = model.encoder(seq_t, cid_t)
+            
+            print(f"z_style mean magnitude: {mu.abs().mean().item():.4f}")
+            print(f"z_style std: {mu.std().item():.4f}")
+            
+        ac = generator.autocomplete(sample_tensor, char_id_tensor, next_char_id = 2)
+        
+        self.animate(ac)
     
     @torch.no_grad()    
     def recognize_char(self):
@@ -268,96 +355,17 @@ class DrawingApp:
         
         print(f"Prediction: {predicted_char}\tConfidence: {top_prob:.2f}\tMargin: {margin:.2f}")
     
-    @torch.no_grad() 
-    def draw_char(self):
-        device = "cuda" if torch.cuda.is_available() else "cpu"
-
-        model = StrokeModel(
-            input_size = 3,
-            hidden_size = 256,
-            latent_size = 64,
-            num_layers = 1
-        ).to(device)
-
-        model.load_state_dict(torch.load(
-                "models/handwriting_model.pth", 
-                map_location = device
-            )
-        )
-
-        generator = Handwrite(model = model, device = device)
-
-        samples = np.load("./data/strokes.npy", allow_pickle = True)
-        single_sample = [to_relative(normalize(samples[0].astype(np.float32)))]
-
-        dataset = StrokeDataset(single_sample) 
-        sample_tensor = dataset[0] .unsqueeze(0).to(device)
-
-        model.eval()
-        mean_dist, log_var = model.encoder(sample_tensor)
-        z = mean_dist
-
-        # gen_strokes = generator.generate(z = z)
-            
-        seq = sample_tensor.cpu().numpy()
-
-        min_x, max_x = 0, 0
-        min_y, max_y = 0, 0
-        curr_x, curr_y = 0, 0
-
-        for dx, dy, pen in seq:
-            curr_x += dx * 0.6
-            curr_y += dy * 0.6
-            
-            min_x, max_x = min(min_x, curr_x), max(max_x, curr_x)
-            min_y, max_y = min(min_y, curr_y), max(max_y, curr_y)
-
-        self.canvas.update_idletasks() 
-        canvas_w = self.canvas.winfo_width()
-        canvas_h = self.canvas.winfo_height()
-        
-        drawing_w = max_x - min_x
-        drawing_h = max_y - min_y
-
-        start_x = (canvas_w - drawing_w) / 2 - min_x
-        start_y = (canvas_h - drawing_h) / 2 - min_y
-
-        x, y = start_x, start_y
-
-        def draw_step(index, curr_x, curr_y):
-            if index >= len(seq):
-                return
-
-            dx, dy, pen = seq[index]
-
-            nx = curr_x + (dx * 0.6)
-            ny = curr_y + (dy * 0.6)
-
-            if pen < 0.5:
-                self.canvas.create_line(
-                    x0 = curr_x,
-                    y0 = curr_y,
-                    x1 = nx,
-                    y1 = ny,
-                    fill = "white",
-                    width = 7.5, 
-                    capstyle = tk.ROUND, 
-                    smooth = tk.TRUE
-                )
-            
-            self.canvas.after(10, draw_step, index + 1, nx, ny)
-
-        draw_step(0, x, y)
-    
     @torch.no_grad()
     def generate_char(self):
         device = "cuda" if torch.cuda.is_available() else "cpu"
 
         model = StrokeModel(
-            input_size = 3,
+            input_size = 5,
             hidden_size = 256,
             latent_size = 64,
-            num_layers = 1
+            num_layers = 1,
+            num_classes = 10,
+            class_emb_dim = 32
         ).to(device)
 
         model.load_state_dict(torch.load(

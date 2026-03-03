@@ -118,7 +118,7 @@ class Handwrite:
         
         for _ in range(max_steps):
             out, hidden = self.model.decoder(z_style, x, next_char_id, hidden)
-            dx, dy, pen = self.mdn.sample_step(out, temperature = 0.6)
+            dx, dy, pen = self.mdn.sample_step(out, temperature = 0.1)
             
             p1, p2, p3 = pen
             out_seq.append([dx, dy, p1, p2, p3])
@@ -141,7 +141,9 @@ if __name__ == "__main__":
         input_size = 5,
         hidden_size = 256,
         latent_size = 64,
-        num_layers = 1
+        num_layers = 1,
+        num_classes = 10,
+        class_emb_dim = 32
     ).to(device)
 
     model.load_state_dict(torch.load(
@@ -153,17 +155,31 @@ if __name__ == "__main__":
     generator = Handwrite(model = model, device = device)
 
     samples = np.load("./data/strokes.npy", allow_pickle = True)
+    
+    for i, (s, c) in enumerate(samples):
+        print(f"index {i}: char_id={c}, strokes={len(s)}")
+        
+    matches = [(s, c) for s, c in samples if c == 3]
+    raw_sample, char_id = matches[-1]
 
-    raw_sample, char_id = samples[0]
-    relative_sample = to_relative(raw_sample)
-    single_sample = [(normalize(relative_sample), char_id)]
+    arr = np.array(raw_sample)
+    
+    if arr.ndim == 2 and arr.shape[1] == 5:
+        relative_sample = normalize(arr)
+    else:
+        relative_sample = normalize(to_relative(raw_sample))
+        
+    single_sample = [(relative_sample, char_id)]
     
     dataset = StrokeDataset(single_sample) 
     sample_tensor, char_id_tensor = dataset[0]
     
+    print(f"sequence length: {sample_tensor.shape}")
+    print(f"num p3 t: {(sample_tensor[:, 4] == 1).sum()}")
+    
     recon = generator.reconstruct(sample_tensor, char_id_tensor)
     gen = generator.generate(sample_tensor, char_id_tensor)
-    ac = generator.autocomplete(sample_tensor, char_id_tensor, 1)
+    ac = generator.autocomplete(sample_tensor, char_id_tensor, 2)
 
     # Plotting the dataset itself
     plot_strokes(sample_tensor.numpy(), multiple = False)

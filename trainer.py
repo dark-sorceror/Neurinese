@@ -4,6 +4,7 @@ import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import DataLoader
 from torch.nn.utils.rnn import pad_sequence
+import torch.nn.functional as F
 
 from mdn import MDN
 from utils import plot_strokes
@@ -137,6 +138,7 @@ class HandwritingTrainer:
     
     def train(self, loader: DataLoader, kl_w: float):
         self.model.train()
+        
         total_loss = 0.0
 
         sos = torch.tensor(
@@ -149,34 +151,48 @@ class HandwritingTrainer:
             seq = seq.to(self.device)
             char_id = char_id.to(self.device)
             
-            # Decoder Input: [SOS, A, B]
             decoder_input_seq = seq[:, :-1, :].clone()
             mask = torch.rand_like(decoder_input_seq[:, :, 0]) < 0.20
             decoder_input_seq[mask] = 0.0
             
             batch_size = seq.size(0)
-            sos = sos.view(1, 1, 5).repeat(batch_size, 1, 1)
-            
-            # Input to Decoder = [SOS] + [Seq excluding last step], then full seq, then history
-            decoder_input = torch.cat([sos, decoder_input_seq], dim = 1)
+            sos_b = sos.view(1, 1, 5).repeat(batch_size, 1, 1)
+            decoder_input = torch.cat([sos_b, decoder_input_seq], dim = 1)
+
             mean, log_var = self.model.encoder(seq, char_id)
             z = self.reparameterize(mean, log_var)
+
+            # Normal reconstruction loss
             pred, _ = self.model.decoder(z, decoder_input, char_id)
             loss, kl = self.criterion(pred, seq, mean, log_var)
-            
+
+            # Cross-character style transfer loss
+            shuffled_char_id = char_id[torch.randperm(char_id.size(0))]
+
+            if not torch.all(shuffled_char_id == char_id):
+                pred_cross, _ = self.model.decoder(z, decoder_input, shuffled_char_id)
+
+                pen_logits  = pred_cross[..., :3]
+                pen_target  = seq[..., 2:5]
+                pen_target_idx = torch.argmax(pen_target, dim = -1)
+                cross_pen_loss = F.cross_entropy(
+                    pen_logits.view(-1, 3),
+                    pen_target_idx.view(-1)
+                ) * 0.1
+
+                loss = loss + cross_pen_loss
+
             loss = loss + kl * kl_w
             
             self.optimizer.zero_grad()
             loss.backward()
-            
-            torch.nn.utils.clip_grad_norm_(parameters = self.model.parameters(), max_norm = 1.0)
-            
+            torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm = 1.0)
             self.optimizer.step()
             
             total_loss += loss.item() * seq.size(0)
         
         return total_loss / len(loader.dataset)
-    
+
     @torch.no_grad()
     def validate(self, loader: DataLoader):
         self.model.eval()
@@ -189,26 +205,38 @@ class HandwritingTrainer:
         )
         
         for i, (seq, char_id) in enumerate(loader):
-            kl_w = min(0.05, 0.05 * (i / 2000))
             seq = seq.to(self.device)
             char_id = char_id.to(self.device)
             
             batch_size = seq.size(0)
-            sos = sos.view(1, 1, 5).repeat(batch_size, 1, 1)
-            decoder_input = torch.cat([sos, seq[:, :-1, :]], dim = 1)
+            sos_b = sos.view(1, 1, 5).repeat(batch_size, 1, 1)
+            decoder_input = torch.cat([sos_b, seq[:, :-1, :]], dim=1)
             
             mean, log_var = self.model.encoder(seq, char_id)
             z = mean 
             
             pred, _ = self.model.decoder(z, decoder_input, char_id)
-            
             loss, kl = self.criterion(pred, seq, mean, log_var)
-            loss = loss + kl * kl_w
-            
+
+            shuffled_char_id = char_id[torch.randperm(char_id.size(0))]
+            if not torch.all(shuffled_char_id == char_id):
+                pred_cross, _ = self.model.decoder(z, decoder_input, shuffled_char_id)
+                
+                pen_logits = pred_cross[..., :3]
+                pen_target_idx = torch.argmax(seq[..., 2:5], dim = -1)
+                cross_pen_loss = F.cross_entropy(
+                    pen_logits.view(-1, 3),
+                    pen_target_idx.view(-1)
+                ) * 0.1
+                
+                loss = loss + cross_pen_loss
+
+            kl_w_val = min(0.001, 0.001 * i / 20)
+            loss = loss + kl * kl_w_val
             total_loss += loss.item() * seq.size(0)
         
         return total_loss / len(loader.dataset)
-    
+
     def fit(
         self, 
         train_loader: DataLoader,
@@ -218,11 +246,12 @@ class HandwritingTrainer:
         checkpoint_path: str = None
     ):
         best_val_loss = float("inf")
+        epochs_no_improve = 0
         
         for epoch in range(epochs):
-            kl_w = min(0.05, 0.05 * epoch / 20)
+            kl_w = min(0.001, 0.001 * epoch / 20)
             train_loss = self.train(train_loader, kl_w)
-            val_loss = self.validate(val_loader)
+            val_loss   = self.validate(val_loader)
             
             self.history["train_loss"].append(train_loss)
             self.history["val_loss"].append(val_loss)
@@ -253,16 +282,23 @@ def collate_fn(batch):
     
     return padded_seqs, char_ids
 
+def load_sample(raw):
+    arr = np.array(raw)
+    
+    if arr.ndim == 2 and arr.shape[1] == 5:
+        return normalize(arr)
+    else:
+        return normalize(to_relative(raw))
+
 if __name__ == "__main__":
     samples = np.load(DATA_PATH, allow_pickle = True)
 
     processed_samples = []
 
     for raw, char_id in samples:
-        seq_rel = to_relative(raw) 
-        seq_final = normalize(seq_rel)
+        seq = load_sample(raw)  
 
-        processed_samples.append((seq_final, char_id))
+        processed_samples.append((seq, char_id))
 
     dataset = StrokeDataset(processed_samples)
 
@@ -303,3 +339,28 @@ if __name__ == "__main__":
         patience = 10,
         checkpoint_path = MODEL_PATH
     )
+    
+    import matplotlib.pyplot as plt
+    
+    def plot_loss(history, save_path="./media/loss_curve.png"):
+        fig, ax = plt.subplots(figsize=(10, 5))
+        
+        ax.plot(history["train_loss"], label="Train Loss", linewidth=2, color="#4f8ef7")
+        ax.plot(history["val_loss"],   label="Val Loss",   linewidth=2, color="#f7704f")
+        
+        ax.set_xlabel("Epoch")
+        ax.set_ylabel("Loss (ELBO)")
+        ax.set_title("Neurinese CVAE — Training Curve")
+        ax.legend()
+        ax.grid(True, alpha=0.3)
+        
+        plt.tight_layout()
+        plt.savefig(save_path, dpi=150)
+        plt.show()
+
+    # After trainer.fit():
+    plot_loss(trainer.history)
+    
+    import json
+    with open("./media/mdn_history.json", "w") as f:
+        json.dump(trainer.history, f)
