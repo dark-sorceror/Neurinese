@@ -12,9 +12,25 @@ Neurinese is a real-time handwriting intelligence engine. By combining stroke-le
 
 2. **Context-Aware Autocorrect** - If you write a character with a slight incorrection, it detects the error, matches it with the context of the sentence and regenerates the correct character to be used, again in the handwriting style of the user
 
-<img src="./media/Recon.gif" width="200" />
+## Demo
 
-*GIF of the model reconstructing and mimic user handwriting through teacher forcing
+As of current, this project can achieve the autocompletion feature.
+
+Purposely writing *slanted*, writing 帮助 (help) — the model predicts and draws 你 (you) in the same handwriting style (slanted in this case):
+
+<img src="./media/autocomplete_demo.gif" width="500"/>
+
+Extracting a style vector from the written characters and autocompleting in that style, trained on ~500 samples. Below is a failed attempt
+
+<img src="./media/autocomplete_demo_2.gif" width="500"/>
+
+> **Note:** Generation consistency is still being improved — currently training on a 
+> small dataset. See [Milestones](#milestones).
+
+Here's a closer look at the cross character style transfer. Extracting a style vector from the written character and generating three different characters in that style
+
+<img src="./media/style_transfer.png" width="500"/>
+
 
 ## Table of Contents
 
@@ -33,6 +49,7 @@ Neurinese is a real-time handwriting intelligence engine. By combining stroke-le
   - [Multimodality of Handwriting](#multimodality-of-handwriting)
   - [Disentangling Style from Content](#disentangling-style-from-content)
   - [Stroke Simplification](#stroke-simplification)
+- [Sources](#sources)
 - [Getting Started](#getting-started)
 - [Milestones](#milestones)
 
@@ -64,7 +81,7 @@ This enables for an autoregressive handwriting syntehsis ability, where characte
 
 When Apple first released their Math Notes feature back in the Summer of 2024, it especially intrigued me with how it could not only solve equations but render the solution in the user's own handwriting style.
 
-<img src="./media/AppleMathNotes.png" width="200">
+<img src="./media/AppleMathNotes.png" width="300">
 
 To achieve the handwriting aspect, a system must somehow undersatnd the dynamics of writing rather than simply recognizing symbols. This project aims to explore this concept in the context of handwritten Chinese, whcih inherently lacks any pattern, perfect for model memorization and handwriting synthesis.
 
@@ -145,7 +162,7 @@ $$
 ### Mixture Density Network (MDN)
 
 At any stroke step, multiple next positions are equally valid. There are several pen lifts and fine details in a given Chinese character. A MDN outputs a Gaussian Mixture Model over `(dx, dy)` rather than a single point estimate, following the formulation from 
-[Graves (2013) — Generating Sequences with Recurrent Neural Networks](https://arxiv.org/pdf/1704.03477).
+[Graves (2013) — Generating Sequences with Recurrent Neural Networks](https://arxiv.org/pdf/1308.0850).
 
 ```
 Per output step:
@@ -164,8 +181,8 @@ Per output step:
 
 The bivariate Gaussian probability for each mixture component $k$ is:
 
-$$\mathcal{N}(\mathbf{x} | \mu_k, \sigma_k, \rho_k) = 
-\frac{1}{2\pi\sigma_x\sigma_y\sqrt{1-\rho^2}} 
+$$\mathcal{N}(\mathbf{x} \ | \ \mu_k, \sigma_k, \rho_k) = 
+\frac{1}{2\pi\sigma_x\sigma_y\sqrt{1-\rho^2}}\cdot
 \exp\left(\frac{-z}{2(1-\rho^2)}\right)$$
 
 where:
@@ -247,6 +264,21 @@ On a network level, this noise introduce potential pattern matching gave hindera
 I needed a algorithm that could simplify these strokes into straight lines wherever necessary while not leaving out the smaller details such as corners, hooks and directional changes present in a Chinese character.
 
 Doing research, I came across the **Ramer-Douglas-Peucker algorithm**, which reduces each stroke to its geometrically essential points while preserving special elements.
+
+*RDP Simplification with $\epsilon=2.0$ — Supplementary Section 1
+[Ha & Eck (2017) — sketch-rnn](https://arxiv.org/abs/1704.03477)*
+
+## Sources
+
+- [Ha & Eck (2017) — A Neural Representation of Sketch Drawings](https://arxiv.org/abs/1704.03477)
+
+- [Kingma & Welling (2022) — Auto-Encoding Variational Bayes](https://arxiv.org/pdf/1312.6114)
+
+- [Graves (2013) — Generating Sequences With Recurrent Neural Networks](https://arxiv.org/pdf/1308.0850)
+
+- [Joseph (2021) — Mixture Density Networks: Probabilistic Regression for Uncertainty Estimation](https://deep-and-shallow.com/2021/03/20/mixture-density-networks-probabilistic-regression-for-uncertainty-estimation/)
+
+- [Paul (2020) — Reparameterization trick in Variational Autoencoders](https://medium.com/data-science/reparameterization-trick-126062cfd3c3)
 
 ## Getting Started
 
