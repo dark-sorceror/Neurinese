@@ -81,7 +81,7 @@ This enables for an autoregressive handwriting syntehsis ability, where characte
 
 When Apple first released their Math Notes feature back in the Summer of 2024, it especially intrigued me with how it could not only solve equations but render the solution in the user's own handwriting style.
 
-<img src="./media/AppleMathNotes.png" width="300">
+<img src="./media/apple_math_notes.png" width="300">
 
 To achieve the handwriting aspect, a system must somehow undersatnd the dynamics of writing rather than simply recognizing symbols. This project aims to explore this concept in the context of handwritten Chinese, whcih inherently lacks any pattern, perfect for model memorization and handwriting synthesis.
 
@@ -265,7 +265,7 @@ I needed a algorithm that could simplify these strokes into straight lines where
 
 Doing research, I came across the **Ramer-Douglas-Peucker algorithm**, which reduces each stroke to its geometrically essential points while preserving special elements.
 
-*RDP Simplification with $\epsilon=2.0$ — Supplementary Section 1
+*RDP Simplification with* $\epsilon=2.0$ *— Supplementary Section 1*
 [Ha & Eck (2017) — sketch-rnn](https://arxiv.org/abs/1704.03477)*
 
 ## Sources
