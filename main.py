@@ -19,7 +19,17 @@ MARGIN_THRESHOLD = 0.35
 IMAGE_FILE_PATH = Path("./data/image.npy")
 LABEL_FILE_PATH = Path("./data/label.npy")
 STROKE_FILE_PATH = Path("./data/strokes.npy")
-MODEL_PATH = Path("./CNN_char_model.pth")
+CNN_MODEL_PATH = Path("./models/char_recognizing_model.pth")
+CVAE_MODEL_PATH = Path("./models/handwriting_model.pth")
+
+def predict_next_context(current_char_id):
+    # Simple hardcoded transitions for prototype testing
+    transitions = {
+        2: 0, # 我 -> 你 
+        0: 1, # 你 -> 大
+        1: 2  # 大 -> 我
+    }
+    return transitions.get(current_char_id, None)
 
 class DrawingApp:
     def __init__(self, master):
@@ -31,7 +41,7 @@ class DrawingApp:
         
         self.canvas = Canvas(
             master, 
-            width = CANVAS_SIZE, 
+            width = CANVAS_SIZE * 5, 
             height = CANVAS_SIZE, 
             bg = "black"
         )
@@ -76,6 +86,19 @@ class DrawingApp:
         )
         self.complete_btn.pack(side = tk.LEFT, padx = 5)
         
+        self.demo_btn = Button(
+            master, 
+            text = "▶ Autocomplete 你", 
+            command = lambda: self.demo_complete(next_char_id = 0))
+        self.demo_btn.pack(side = tk.LEFT, padx = 5)
+        
+        self.copilot_btn = Button(
+            master, 
+            text = "Smart Copilot", 
+            command = self.smart_copilot_pipeline
+        )
+        self.copilot_btn.pack(side = tk.LEFT, padx = 5)
+        
         self.CHARACTER_TO_COLLECT = "我"
         self.INDEX_OF_CHARACTER = 2
         self.INDEX_TO_CHAR = {
@@ -89,11 +112,25 @@ class DrawingApp:
         
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         
-        if MODEL_PATH.exists():
-            self.model = CharacterRecognizer(num_classes = len(self.INDEX_TO_CHAR))
-            self.model.load_state_dict(torch.load(MODEL_PATH, map_location=self.device))
-            self.model.to(self.device)
-            self.model.eval()
+        if CNN_MODEL_PATH.exists():
+            self.cnn_model = CharacterRecognizer(num_classes = len(self.INDEX_TO_CHAR))
+            self.cnn_model.load_state_dict(torch.load(CNN_MODEL_PATH, map_location = self.device))
+            self.cnn_model.to(self.device)
+            self.cnn_model.eval()
+
+        if CVAE_MODEL_PATH.exists():
+            self.cvae_model = StrokeModel(
+                input_size = 5, 
+                hidden_size = 256, 
+                latent_size = 64,
+                num_layers = 1, 
+                num_classes = 10, 
+                class_emb_dim = 32
+            ).to(self.device)
+            self.cvae_model.load_state_dict(torch.load(CVAE_MODEL_PATH, map_location = self.device))
+            self.cvae_model.eval()
+            
+            self.generator = Handwrite(model = self.cvae_model, device = self.device)
 
     def start_stroke(self, event):
         self.lastX, self.lastY = event.x, event.y
@@ -232,30 +269,40 @@ class DrawingApp:
         
         for _ in range(19):
             scale = np.random.uniform(0.85, 1.15)
-            noise = np.random.normal(0, 5, size=processed_input.shape)
+            noise = np.random.normal(0, 0.05, size=processed_input.shape)
             aug_img = np.clip(processed_input * scale + noise, 0, 1)
             new_images.append(aug_img)
 
         new_images = np.array(new_images)
         new_labels = np.full(len(new_images), self.INDEX_OF_CHARACTER)
+        
+        total_cnn_samples = 0
 
         if not IMAGE_FILE_PATH.exists():
             np.save(IMAGE_FILE_PATH, new_images)
             np.save(LABEL_FILE_PATH, new_labels)
+            
+            total_cnn_samples = len(new_images)
         else:
             images = np.load(IMAGE_FILE_PATH)
             labels = np.load(LABEL_FILE_PATH)
             
-            np.save(IMAGE_FILE_PATH, np.concatenate([images, new_images], axis = 0))
+            combined_images = np.concatenate([images, new_images], axis = 0)
+            
+            np.save(IMAGE_FILE_PATH, combined_images)
             np.save(LABEL_FILE_PATH, np.concatenate([labels, new_labels], axis = 0))
+            
+            total_cnn_samples = len(combined_images)
+            
+        print(f"Saved 1 + 19 augmented images. Total CNN samples: {total_cnn_samples}")
 
-        def augment_stroke(seq: list):
+        def augment_stroke(s: list):
             scale = np.random.uniform(0.85, 1.15)
             angle = np.random.uniform(-0.05, 0.05)
             cos_a, sin_a = np.cos(angle), np.sin(angle)
             aug = []
             
-            for step in seq:
+            for step in s:
                 dx, dy = float(step[0]), float(step[1])
                 p1, p2, p3 = float(step[2]), float(step[3]), float(step[4])
                 new_dx = (cos_a * dx - sin_a * dy) * scale + np.random.normal(0, 0.03)
@@ -265,7 +312,7 @@ class DrawingApp:
             return aug
 
         if STROKE_FILE_PATH.exists():
-            stroke_batch = list(np.load(STROKE_FILE_PATH, allow_pickle = True))
+            stroke_batch = np.load(STROKE_FILE_PATH, allow_pickle = True).tolist()
         else:
             stroke_batch = []
 
@@ -274,7 +321,9 @@ class DrawingApp:
         for _ in range(19):
             stroke_batch.append((augment_stroke(seq), self.INDEX_OF_CHARACTER))
 
-        np.save(STROKE_FILE_PATH, np.array(stroke_batch, dtype = object))
+        save_arr = np.empty(len(stroke_batch), dtype = object)
+        save_arr[:] = stroke_batch
+        np.save(STROKE_FILE_PATH, save_arr)
         
         print(f"Saved 1 + 19 augmented. Total samples: {len(stroke_batch)}")
 
@@ -431,6 +480,135 @@ class DrawingApp:
         ac = generator.autocomplete(sample_tensor, char_id_tensor, next_char_id = 0)
         
         self.animate(ac)
+        
+    def demo_complete(self, next_char_id = 0):
+        seq = self.preprocess_strokes()
+        
+        if not seq: return
+
+        relative = to_relative(seq)
+        normalized = normalize(relative)
+        single_sample = [(normalized, next_char_id)]
+
+        dataset = StrokeDataset(single_sample)
+        sample_tensor, char_id_tensor = dataset[0]
+
+        model = StrokeModel(
+            input_size = 5, 
+            hidden_size = 256, 
+            latent_size = 64,
+            num_layers = 1, 
+            num_classes = 10, 
+            class_emb_dim = 32
+        ).to(self.device)
+        
+        model.load_state_dict(torch.load("models/handwriting_model.pth", map_location = self.device))
+
+        generator = Handwrite(model = model, device = self.device)
+        seq_t = sample_tensor.unsqueeze(0).to(self.device)
+        cid_t = char_id_tensor.unsqueeze(0).to(self.device)
+
+        ac = generator.autocomplete(sample_tensor, char_id_tensor, next_char_id = next_char_id)
+        
+        self.animate_append(ac)
+
+    def animate_append(self, seq):
+        all_x = []
+        
+        for stroke in self.strokes:
+            for x, y in stroke:
+                all_x.append(x)
+        
+        last_x = max(all_x) if all_x else self.canvas.winfo_width() * 0.4
+        
+        curr_x, curr_y = 0.0, 0.0
+        min_x, max_x, min_y, max_y = 0.0, 0.0, 0.0, 0.0
+        
+        for step in seq:
+            curr_x += step[0] * 50
+            curr_y += step[1] * 50
+            min_x, max_x = min(min_x, curr_x), max(max_x, curr_x)
+            min_y, max_y = min(min_y, curr_y), max(max_y, curr_y)
+
+        canvas_h = self.canvas.winfo_height()
+        
+        gap = 20
+        start_x = last_x + gap - min_x
+        start_y = (canvas_h - (max_y - min_y)) / 2 - min_y
+
+        def draw_step(index, cx, cy):
+            if index >= len(seq): return
+            
+            step = seq[index]
+            dx, dy, p1 = step[0], step[1], step[2]
+            nx, ny = cx + dx * 50, cy + dy * 50
+            
+            if p1 > 0.5:
+                self.canvas.create_line(
+                    cx, cy, nx, ny,
+                    fill = "white", 
+                    width = 7.5,
+                    capstyle = tk.ROUND, 
+                    smooth = tk.TRUE
+                )
+                
+            self.canvas.after(10, draw_step, index + 1, nx, ny)
+
+        draw_step(0, start_x, start_y)
+
+    @torch.no_grad()
+    def smart_copilot_pipeline(self):
+        input_data = self.preprocess_image()
+        seq = self.preprocess_strokes()
+        
+        if input_data is None or not seq:
+            print("No drawing detected.")
+            
+            return
+
+        # Recgonize
+        input_tensor = torch.from_numpy(input_data).unsqueeze(0).to(self.device)
+        cnn_outputs = self.cnn_model(input_tensor)
+        probs = torch.softmax(cnn_outputs, dim = 1).squeeze().cpu().numpy()
+        
+        top_idx = probs.argmax()
+        top_prob = probs[top_idx]
+        
+        if top_prob < CONFIDENCE_THRESHOLD:
+            print(f"Pipeline halted: Recognition confidence too low ({top_prob:.2f}).")
+            
+            return
+            
+        recognized_char = self.INDEX_TO_CHAR.get(top_idx, "Unknown")
+        
+        print(f"Recognized: {recognized_char} (ID: {top_idx})")
+
+        next_char_id = self.predict_next_context(top_idx) 
+        
+        if next_char_id is None:
+            print("Pipeline halted: No logical next character predicted by NLP.")
+            
+            return
+            
+        print(f"NLP Predicted Next: {self.INDEX_TO_CHAR[next_char_id]} (ID: {next_char_id})")
+
+        relative = to_relative(seq)
+        normalized = normalize(relative)
+        
+        single_sample = [(normalized, top_idx)] 
+        dataset = StrokeDataset(single_sample)
+        sample_tensor, char_id_tensor = dataset[0]
+
+        seq_t = sample_tensor.unsqueeze(0).to(self.device)
+        cid_t = char_id_tensor.unsqueeze(0).to(self.device)
+
+        generated_seq = self.generator.autocomplete(
+            sample_tensor, 
+            char_id_tensor, 
+            next_char_id = next_char_id
+        )
+
+        self.animate_append(generated_seq)
 
 if __name__ == "__main__":
     print("Character to collect: 你")
