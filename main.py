@@ -1,4 +1,3 @@
-import time
 import torch
 import numpy as np
 import tkinter as tk
@@ -69,13 +68,6 @@ class DrawingApp:
             command = self.recognize_char
         )
         self.recognize_btn.pack(side = tk.LEFT, padx = 5)
-        
-        self.draw_btn = Button(
-            master, 
-            text = "Draw", 
-            command = self.draw_char
-        )
-        self.draw_btn.pack(side = tk.LEFT, padx = 5)
         
         self.complete_btn = Button(
             master, 
@@ -150,15 +142,6 @@ class DrawingApp:
                 width = 15
             )
             self.lastX, self.lastY = event.x, event.y
-
-    def clear_canvas(self):
-        self.canvas.delete("all")
-        self.image = Image.new(
-            mode = "L", 
-            size = (CANVAS_SIZE, CANVAS_SIZE), 
-            color = 0
-        )
-        self.draw = ImageDraw.Draw(self.image)
         
     def preprocess_image(self):
         return preprocess_pil_image(self.image)
@@ -176,7 +159,64 @@ class DrawingApp:
                 seq.append(raw_stroke)
                 
         return seq
+    
+    def animate(self, seq):
+        self.clear_canvas()
+
+        curr_x, curr_y = 0.0, 0.0
+        min_x, max_x, min_y, max_y = 0.0, 0.0, 0.0, 0.0
+
+        for step in seq:
+            dx, dy = step[0], step[1]
+            curr_x += dx * 50
+            curr_y += dy * 50
+            min_x, max_x = min(min_x, curr_x), max(max_x, curr_x)
+            min_y, max_y = min(min_y, curr_y), max(max_y, curr_y)
+
+        self.canvas.update_idletasks()
         
+        canvas_w = self.canvas.winfo_width()
+        canvas_h = self.canvas.winfo_height()
+
+        start_x = (canvas_w - (max_x - min_x)) / 2 - min_x
+        start_y = (canvas_h - (max_y - min_y)) / 2 - min_y
+
+        def draw_step(index, curr_x, curr_y):
+            if index >= len(seq):
+                return
+
+            step = seq[index]
+            dx, dy = step[0], step[1]
+            p1 = step[2]
+
+            nx = curr_x + dx * 50
+            ny = curr_y + dy * 50
+
+            if p1 > 0.5:
+                self.canvas.create_line(
+                    curr_x,
+                    curr_y, 
+                    nx, 
+                    ny,
+                    fill = "white",
+                    width = 7.5,
+                    capstyle = tk.ROUND, 
+                    smooth = tk.TRUE
+                )
+
+            self.canvas.after(10, draw_step, index + 1, nx, ny)
+
+        draw_step(0, start_x, start_y)
+    
+    def clear_canvas(self):
+        self.canvas.delete("all")
+        self.image = Image.new(
+            mode = "L", 
+            size = (CANVAS_SIZE, CANVAS_SIZE), 
+            color = 0
+        )
+        self.draw = ImageDraw.Draw(self.image)
+    
     def save(self):
         processed_input = self.preprocess_image()
         
@@ -240,94 +280,6 @@ class DrawingApp:
 
         self.strokes.clear()
         self.clear_canvas()
-    
-    def animate(self, seq):
-        self.clear_canvas()
-
-        curr_x, curr_y = 0.0, 0.0
-        min_x, max_x, min_y, max_y = 0.0, 0.0, 0.0, 0.0
-
-        for step in seq:
-            dx, dy = step[0], step[1]
-            curr_x += dx * 50
-            curr_y += dy * 50
-            min_x, max_x = min(min_x, curr_x), max(max_x, curr_x)
-            min_y, max_y = min(min_y, curr_y), max(max_y, curr_y)
-
-        self.canvas.update_idletasks()
-        
-        canvas_w = self.canvas.winfo_width()
-        canvas_h = self.canvas.winfo_height()
-
-        start_x = (canvas_w - (max_x - min_x)) / 2 - min_x
-        start_y = (canvas_h - (max_y - min_y)) / 2 - min_y
-
-        def draw_step(index, curr_x, curr_y):
-            if index >= len(seq):
-                return
-
-            step = seq[index]
-            dx, dy = step[0], step[1]
-            p1 = step[2]
-
-            nx = curr_x + dx * 50
-            ny = curr_y + dy * 50
-
-            if p1 > 0.5:
-                self.canvas.create_line(
-                    curr_x,
-                    curr_y, 
-                    nx, 
-                    ny,
-                    fill = "white",
-                    width = 7.5,
-                    capstyle = tk.ROUND, 
-                    smooth = tk.TRUE
-                )
-
-            self.canvas.after(10, draw_step, index + 1, nx, ny)
-
-        draw_step(0, start_x, start_y)
-    
-    def infer_style(self):
-        seq = self.preprocess_strokes()
-        
-        if not seq: return
-
-        relative = to_relative(seq)
-        normalized = normalize(relative)
-        single_sample = [(normalized, 0)]
-
-        dataset = StrokeDataset(single_sample)
-        sample_tensor, char_id_tensor = dataset[0]
-
-        model = StrokeModel(
-            input_size = 5, 
-            hidden_size = 256, 
-            latent_size = 64,
-            num_layers = 1, 
-            num_classes = 10, 
-            class_emb_dim = 32
-        ).to(self.device)
-        model.load_state_dict(
-            torch.load("models/handwriting_model.pth", 
-                map_location = self.device
-            )
-        )
-
-        generator = Handwrite(model = model, device = self.device)
-
-        with torch.no_grad():
-            seq_t = sample_tensor.unsqueeze(0).to(self.device)
-            cid_t = char_id_tensor.unsqueeze(0).to(self.device)
-            mu, _ = model.encoder(seq_t, cid_t)
-            
-            print(f"z_style mean magnitude: {mu.abs().mean().item():.4f}")
-            print(f"z_style std: {mu.std().item():.4f}")
-            
-        ac = generator.autocomplete(sample_tensor, char_id_tensor, next_char_id = 2)
-        
-        self.animate(ac)
     
     @torch.no_grad()    
     def recognize_char(self):
@@ -439,6 +391,46 @@ class DrawingApp:
             self.canvas.after(10, draw_step, index + 1, nx, ny)
 
         draw_step(0, x, y)
+
+    @torch.no_grad()
+    def infer_style(self):
+        seq = self.preprocess_strokes()
+        
+        if not seq: return
+
+        relative = to_relative(seq)
+        normalized = normalize(relative)
+        single_sample = [(normalized, 0)]
+
+        dataset = StrokeDataset(single_sample)
+        sample_tensor, char_id_tensor = dataset[0]
+
+        model = StrokeModel(
+            input_size = 5, 
+            hidden_size = 256, 
+            latent_size = 64,
+            num_layers = 1, 
+            num_classes = 10, 
+            class_emb_dim = 32
+        ).to(self.device)
+        model.load_state_dict(
+            torch.load("models/handwriting_model.pth", 
+                map_location = self.device
+            )
+        )
+
+        generator = Handwrite(model = model, device = self.device)
+
+        seq_t = sample_tensor.unsqueeze(0).to(self.device)
+        cid_t = char_id_tensor.unsqueeze(0).to(self.device)
+        mu, _ = model.encoder(seq_t, cid_t)
+        
+        print(f"z_style mean magnitude: {mu.abs().mean().item():.4f}")
+        print(f"z_style std: {mu.std().item():.4f}")
+            
+        ac = generator.autocomplete(sample_tensor, char_id_tensor, next_char_id = 0)
+        
+        self.animate(ac)
 
 if __name__ == "__main__":
     print("Character to collect: 你")
